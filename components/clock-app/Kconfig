@@ -1,0 +1,20 @@
+# Component configuration for clock-app
+menu "Clock App Component"
+
+    config CLOCK_APP_AUTO_DOWNLOAD
+        bool "Automatically download latest static files"
+        default y
+        help
+            Automatically download the latest static_files.h from the clock-app repository
+            during build time. If disabled, a fallback empty static files will be used.
+
+    config CLOCK_APP_CACHE_TIMEOUT
+        int "Cache timeout for downloads (hours)"
+        depends on CLOCK_APP_AUTO_DOWNLOAD
+        default 24
+        range 1 168
+        help
+            How long to cache downloaded files before checking for updates.
+            Set to a lower value for more frequent updates during development.
+
+endmenu

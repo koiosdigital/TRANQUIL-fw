@@ -1,0 +1,710 @@
+openapi: 3.0.3
+info:
+  title: KD Clock API
+  description: |
+    REST API and WebSocket interface for Koios Digital Clock firmware.
+
+    This API provides configuration and control for various types of clocks including:
+    - Nixie tube clocks
+    - Fibonacci clocks
+    - Word clocks (wordclock)
+    - LED strips
+    - System configuration (time zones, NTP, WiFi hostname)
+
+    The API includes both HTTP REST endpoints for configuration and WebSocket endpoints for real-time updates.
+
+    **Variant-specific endpoints**: Some endpoints are only available depending on the firmware variant:
+    - `/api/nixie/*` - Only available on Nixie clock variants
+    - `/api/fibonacci/*` - Only available on Fibonacci clock variants
+
+    **WebSocket Protocol**: All WebSocket endpoints support:
+    - Initial state broadcast upon connection
+    - Real-time configuration updates via JSON messages
+    - State broadcasting to all connected clients when changes occur
+    - Automatic ping/pong for connection health monitoring
+  version: 1.0.0
+  contact:
+    name: Koios Digital
+    url: https://koiosdigital.com
+  license:
+    name: GPL v3
+    url: https://www.gnu.org/licenses/gpl-3.0.html
+
+servers:
+  - url: http://{clock_ip}
+    description: Clock device IP address
+    variables:
+      clock_ip:
+        default: "192.168.1.100"
+        description: IP address of the clock on your network
+
+tags:
+  - name: System
+    description: System configuration and information
+  - name: LEDs
+    description: LED strip control and effects
+  - name: Nixie
+    description: Nixie tube clock configuration (Nixie variants only)
+  - name: Fibonacci
+    description: Fibonacci clock configuration (Fibonacci variants only)
+  - name: Time
+    description: Time zone and NTP configuration
+  - name: WebSocket
+    description: Real-time WebSocket endpoints
+
+paths:
+  /api/about:
+    get:
+      tags: [System]
+      summary: Get device information
+      description: Returns basic information about the clock device including model, type, subtype, and firmware version
+      responses:
+        "200":
+          description: Device information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model:
+                    type: string
+                    description: Firmware variant/model name
+                    example: "CLOCK-fw"
+                  type:
+                    type: string
+                    description: Device type
+                    example: "clock"
+                  subtype:
+                    type: string
+                    description: Clock variant
+                    enum: [nixie, fibonacci, wordclock]
+                    example: "nixie"
+                  version:
+                    type: string
+                    description: Firmware version
+                    example: "1.0.0"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/system/config:
+    get:
+      tags: [System]
+      summary: Get system configuration
+      description: Returns current system configuration including timezone, NTP server, and WiFi hostname
+      responses:
+        "200":
+          description: Current system configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemConfig"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      tags: [System]
+      summary: Update system configuration
+      description: Updates system configuration. Only provided fields will be updated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemConfig"
+            examples:
+              timezone_update:
+                summary: Update timezone only
+                value:
+                  timezone: "America/New_York"
+              full_update:
+                summary: Update all fields
+                value:
+                  auto_timezone: false
+                  timezone: "Europe/London"
+                  ntp_server: "pool.ntp.org"
+                  wifi_hostname: "my-clock"
+      responses:
+        "200":
+          description: Configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "408":
+          $ref: "#/components/responses/RequestTimeout"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/time/zonedb:
+    get:
+      tags: [Time]
+      summary: Get available time zones
+      description: |
+        Returns a list of all available time zones with their POSIX rule strings.
+        Response uses chunked transfer encoding for efficient streaming of large timezone database.
+      responses:
+        "200":
+          description: List of available time zones
+          headers:
+            Transfer-Encoding:
+              schema:
+                type: string
+                example: chunked
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      description: Time zone name (e.g., "America/New_York")
+                      example: "America/New_York"
+                    rule:
+                      type: string
+                      description: POSIX timezone rule string
+                      example: "EST5EDT,M3.2.0,M11.1.0"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/leds:
+    get:
+      tags: [LEDs]
+      summary: Get LED configuration
+      description: Returns current LED strip configuration including mode, color, brightness, and speed
+      responses:
+        "200":
+          description: Current LED configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LEDConfig"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      tags: [LEDs]
+      summary: Update LED configuration
+      description: Updates LED configuration. Only provided fields will be updated. Changes are broadcast to WebSocket clients.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LEDConfig"
+            examples:
+              color_change:
+                summary: Change color only
+                value:
+                  color:
+                    r: 255
+                    g: 0
+                    b: 0
+              mode_change:
+                summary: Change effect mode
+                value:
+                  mode: "rainbow"
+                  speed: 50
+              full_config:
+                summary: Complete configuration
+                value:
+                  mode: "solid"
+                  color:
+                    r: 128
+                    g: 64
+                    b: 255
+                  brightness: 200
+                  speed: 10
+                  on: true
+      responses:
+        "200":
+          description: LED configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "408":
+          $ref: "#/components/responses/RequestTimeout"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/leds/ws:
+    get:
+      tags: [LEDs, WebSocket]
+      summary: LED WebSocket endpoint
+      description: |
+        WebSocket endpoint for real-time LED control and state updates.
+
+        **Connection behavior:**
+        - Immediately sends current LED state upon connection
+        - Accepts JSON configuration updates (same format as POST /api/leds)
+        - Broadcasts state changes to all connected clients
+        - Supports ping/pong for connection health monitoring
+
+        **Supported frame types:**
+        - TEXT: JSON configuration updates
+        - PING/PONG: Connection health monitoring
+        - CLOSE: Clean connection termination
+      responses:
+        "101":
+          description: WebSocket connection established
+        "400":
+          description: WebSocket upgrade failed
+
+  /api/nixie:
+    get:
+      tags: [Nixie]
+      summary: Get Nixie clock configuration
+      description: |
+        Returns current Nixie clock configuration.
+        **Note:** Only available on Nixie clock firmware variants.
+      responses:
+        "200":
+          description: Current Nixie configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NixieConfig"
+        "404":
+          description: Endpoint not available on this firmware variant
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      tags: [Nixie]
+      summary: Update Nixie clock configuration
+      description: |
+        Updates Nixie clock configuration. Only provided fields will be updated.
+        Changes are broadcast to WebSocket clients.
+        **Note:** Only available on Nixie clock firmware variants.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NixieConfig"
+            examples:
+              brightness_change:
+                summary: Change brightness only
+                value:
+                  brightness: 75
+              time_format:
+                summary: Switch to 24-hour format
+                value:
+                  military_time: true
+              full_config:
+                summary: Complete configuration
+                value:
+                  brightness: 85
+                  military_time: false
+                  blinking_dots: true
+                  on: true
+      responses:
+        "200":
+          description: Nixie configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Endpoint not available on this firmware variant
+        "408":
+          $ref: "#/components/responses/RequestTimeout"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/nixie/ws:
+    get:
+      tags: [Nixie, WebSocket]
+      summary: Nixie WebSocket endpoint
+      description: |
+        WebSocket endpoint for real-time Nixie clock control and state updates.
+        **Note:** Only available on Nixie clock firmware variants.
+
+        **Connection behavior:**
+        - Immediately sends current Nixie state upon connection
+        - Accepts JSON configuration updates (same format as POST /api/nixie)
+        - Broadcasts state changes to all connected clients
+        - Supports ping/pong for connection health monitoring
+
+        **Supported frame types:**
+        - TEXT: JSON configuration updates
+        - PING/PONG: Connection health monitoring
+        - CLOSE: Clean connection termination
+      responses:
+        "101":
+          description: WebSocket connection established
+        "400":
+          description: WebSocket upgrade failed
+        "404":
+          description: Endpoint not available on this firmware variant
+
+  /api/fibonacci:
+    get:
+      tags: [Fibonacci]
+      summary: Get Fibonacci clock configuration
+      description: |
+        Returns current Fibonacci clock configuration including theme information.
+        **Note:** Only available on Fibonacci clock firmware variants.
+      responses:
+        "200":
+          description: Current Fibonacci configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FibonacciConfig"
+        "404":
+          description: Endpoint not available on this firmware variant
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      tags: [Fibonacci]
+      summary: Update Fibonacci clock configuration
+      description: |
+        Updates Fibonacci clock configuration. Only provided fields will be updated.
+        Changes are broadcast to WebSocket clients.
+        **Note:** Only available on Fibonacci clock firmware variants.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FibonacciConfigUpdate"
+            examples:
+              brightness_change:
+                summary: Change brightness only
+                value:
+                  brightness: 180
+              theme_change:
+                summary: Switch theme
+                value:
+                  theme_id: 2
+              full_config:
+                summary: Complete configuration
+                value:
+                  brightness: 200
+                  theme_id: 1
+                  on: true
+      responses:
+        "200":
+          description: Fibonacci configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Endpoint not available on this firmware variant
+        "408":
+          $ref: "#/components/responses/RequestTimeout"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/fibonacci/ws:
+    get:
+      tags: [Fibonacci, WebSocket]
+      summary: Fibonacci WebSocket endpoint
+      description: |
+        WebSocket endpoint for real-time Fibonacci clock control and state updates.
+        **Note:** Only available on Fibonacci clock firmware variants.
+
+        **Connection behavior:**
+        - Immediately sends current Fibonacci state upon connection
+        - Accepts JSON configuration updates (same format as POST /api/fibonacci)
+        - Broadcasts state changes to all connected clients
+        - Supports ping/pong for connection health monitoring
+
+        **Supported frame types:**
+        - TEXT: JSON configuration updates
+        - PING/PONG: Connection health monitoring
+        - CLOSE: Clean connection termination
+      responses:
+        "101":
+          description: WebSocket connection established
+        "400":
+          description: WebSocket upgrade failed
+        "404":
+          description: Endpoint not available on this firmware variant
+
+components:
+  schemas:
+    SystemConfig:
+      type: object
+      properties:
+        auto_timezone:
+          type: boolean
+          description: Whether to automatically detect timezone
+          example: true
+        timezone:
+          type: string
+          description: IANA timezone name
+          example: "America/New_York"
+        ntp_server:
+          type: string
+          description: NTP server hostname or IP
+          example: "pool.ntp.org"
+        wifi_hostname:
+          type: string
+          description: WiFi hostname for the device
+          maxLength: 63
+          example: "my-clock"
+
+    LEDConfig:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+            [
+              solid,
+              blink,
+              breathe,
+              cyclic,
+              rainbow,
+              color_wipe,
+              theater_chase,
+              sparkle,
+            ]
+          description: LED effect mode
+          example: "solid"
+        color:
+          type: object
+          properties:
+            r:
+              type: integer
+              minimum: 0
+              maximum: 255
+              description: Red component
+              example: 255
+            g:
+              type: integer
+              minimum: 0
+              maximum: 255
+              description: Green component
+              example: 128
+            b:
+              type: integer
+              minimum: 0
+              maximum: 255
+              description: Blue component
+              example: 64
+            w:
+              type: integer
+              minimum: 0
+              maximum: 255
+              description: White component (RGBW strips only)
+              example: 0
+          required: [r, g, b]
+        brightness:
+          type: integer
+          minimum: 0
+          maximum: 255
+          description: Overall brightness level
+          example: 255
+        speed:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Animation speed (lower = slower)
+          example: 10
+        on:
+          type: boolean
+          description: Whether LEDs are enabled
+          example: true
+
+    NixieConfig:
+      type: object
+      properties:
+        brightness:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Nixie tube brightness percentage
+          example: 75
+        military_time:
+          type: boolean
+          description: Whether to use 24-hour (military) time format
+          example: false
+        blinking_dots:
+          type: boolean
+          description: Whether colon dots should blink every second
+          example: true
+        on:
+          type: boolean
+          description: Whether Nixie tubes are enabled
+          example: true
+
+    FibonacciTheme:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Theme ID
+          example: 0
+        name:
+          type: string
+          description: Theme name
+          example: "Classic"
+        hour_color:
+          type: string
+          description: Color for hour indicators (hex format)
+          example: "#FF0000"
+        minute_color:
+          type: string
+          description: Color for minute indicators (hex format)
+          example: "#00FF00"
+        both_color:
+          type: string
+          description: Color when hour and minute overlap (hex format)
+          example: "#FFFF00"
+
+    FibonacciConfig:
+      type: object
+      properties:
+        brightness:
+          type: integer
+          minimum: 0
+          maximum: 255
+          description: LED brightness level
+          example: 200
+        theme_id:
+          type: integer
+          minimum: 0
+          description: ID of the selected color theme
+          example: 0
+        on:
+          type: boolean
+          description: Whether Fibonacci clock is enabled
+          example: true
+        themes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FibonacciTheme"
+          description: Available color themes
+          readOnly: true
+
+    FibonacciConfigUpdate:
+      type: object
+      properties:
+        brightness:
+          type: integer
+          minimum: 0
+          maximum: 255
+          description: LED brightness level
+          example: 200
+        theme_id:
+          type: integer
+          minimum: 0
+          description: ID of the selected color theme
+          example: 0
+        on:
+          type: boolean
+          description: Whether Fibonacci clock is enabled
+          example: true
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success]
+          example: "success"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: "Invalid JSON format"
+
+  responses:
+    BadRequest:
+      description: Bad request - invalid input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalid_json:
+              summary: Invalid JSON
+              value:
+                error: "Invalid JSON format"
+            invalid_config:
+              summary: Invalid configuration
+              value:
+                error: "Invalid configuration"
+
+    RequestTimeout:
+      description: Request timeout
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Request Timeout"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Internal Server Error"
+
+  examples:
+    LEDRainbow:
+      summary: Rainbow effect with medium speed
+      value:
+        mode: "rainbow"
+        speed: 25
+        brightness: 200
+        on: true
+
+    LEDSolid:
+      summary: Solid blue color
+      value:
+        mode: "solid"
+        color:
+          r: 0
+          g: 0
+          b: 255
+        brightness: 150
+        on: true
+
+    NixieNormal:
+      summary: Standard Nixie configuration
+      value:
+        brightness: 80
+        military_time: false
+        blinking_dots: true
+        on: true
+
+    NixieMilitary:
+      summary: 24-hour format configuration
+      value:
+        brightness: 90
+        military_time: true
+        blinking_dots: false
+        on: true
+
+    FibonacciTheme1:
+      summary: Change to theme 1
+      value:
+        theme_id: 1
+        brightness: 180
+        on: true
+
+security: []
+
+externalDocs:
+  description: Koios Digital Clock Documentation
+  url: https://docs.koiosdigital.com

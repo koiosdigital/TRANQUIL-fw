@@ -1,0 +1,14 @@
+#
+# Base clock type
+#
+CONFIG_BASE_CLOCK_TYPE_NIXIE=n
+CONFIG_BASE_CLOCK_TYPE_FIBONACCI=y
+CONFIG_BASE_CLOCK_TYPE_WORDCLOCK=n
+CONFIG_BASE_CLOCK_TYPE=2
+
+#
+# Fibonacci Configuration
+#
+CONFIG_FIBONACCI_LED_DATA_PIN=4
+# end of Fibonacci Configuration
+# end of Base clock type

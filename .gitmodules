@@ -1,0 +1,15 @@
+[submodule "components/libwebp"]
+	path = components/libwebp
+	url = https://github.com/koiosdigital/libwebp
+[submodule "components/ESP32-HUB75-MatrixPanel-DMA"]
+	path = components/ESP32-HUB75-MatrixPanel-DMA
+	url = https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA
+[submodule "components/MATRX-protobufs"]
+	path = components/MATRX-protobufs
+	url = https://github.com/koiosdigital/MATRX-protobufs
+[submodule "components/kd_common"]
+	path = components/kd_common
+	url = https://github.com/koiosdigital/kd_common
+[submodule "components/protobufs"]
+	path = components/protobufs
+	url = https://github.com/levitree/protobufs

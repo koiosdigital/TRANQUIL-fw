@@ -1,0 +1,2 @@
+rsource "RobotMotion/Kconfig.projbuild"
+rsource "stusb4500/Kconfig.projbuild"

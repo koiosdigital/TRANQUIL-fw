@@ -1,0 +1,15 @@
+#
+# Base clock type
+#
+CONFIG_BASE_CLOCK_TYPE_NIXIE=n
+CONFIG_BASE_CLOCK_TYPE_FIBONACCI=n
+CONFIG_BASE_CLOCK_TYPE_WORDCLOCK=y
+CONFIG_BASE_CLOCK_TYPE=3
+
+#
+# Word Clock Configuration
+#
+CONFIG_WORDCLOCK_LED_DATA_PIN=4
+# CONFIG_WORDCLOCK_LED_IS_RGBW is not set
+# end of Word Clock Configuration
+# end of Base clock type
