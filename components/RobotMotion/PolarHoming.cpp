@@ -11,6 +11,8 @@
 #include "esp_check.h"
 #include "esp_rom_sys.h"
 
+#include "sdkconfig.h"
+
 static const char* TAG = "PolarHoming";
 
 extern PolarRobot* g_robotInstance; // Defined in main PolarRobot.cpp
@@ -22,11 +24,19 @@ extern PolarRobot* g_robotInstance; // Defined in main PolarRobot.cpp
 esp_err_t PolarRobot::initHomingHardware() {
     // Configure endstop GPIO with interrupt
     gpio_config_t endstop_config = {
-        .pin_bit_mask = (1ULL << _config.theta.endstopPin),
+        .pin_bit_mask = (1ULL << CONFIG_ROBOT_THETA_ENDSTOP_PIN),
         .mode = GPIO_MODE_INPUT,
-        .pull_up_en = _config.theta.endstopInvert ? GPIO_PULLUP_DISABLE : GPIO_PULLUP_ENABLE,
-        .pull_down_en = _config.theta.endstopInvert ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,
-        .intr_type = _config.theta.endstopInvert ? GPIO_INTR_NEGEDGE : GPIO_INTR_POSEDGE
+#if defined(CONFIG_ROBOT_THETA_ENDSTOP_PULLUP) && CONFIG_ROBOT_THETA_ENDSTOP_PULLUP
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+#else
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+#endif
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+#if defined(CONFIG_ROBOT_THETA_ENDSTOP_INVERT) && CONFIG_ROBOT_THETA_ENDSTOP_INVERT
+        .intr_type = GPIO_INTR_NEGEDGE,
+#else
+        .intr_type = GPIO_INTR_POSEDGE,
+#endif
     };
     ESP_RETURN_ON_ERROR(gpio_config(&endstop_config), TAG, "Failed to configure endstop GPIO");
 
@@ -36,25 +46,20 @@ esp_err_t PolarRobot::initHomingHardware() {
         ESP_RETURN_ON_ERROR(isr_err, TAG, "Failed to install GPIO ISR service");
     }
 
-    ESP_RETURN_ON_ERROR(gpio_isr_handler_add(_config.theta.endstopPin, endstopPinISR, this), TAG, "Failed to add endstop ISR");
+    ESP_RETURN_ON_ERROR(gpio_isr_handler_add((gpio_num_t)CONFIG_ROBOT_THETA_ENDSTOP_PIN, endstopPinISR, this), TAG, "Failed to add endstop ISR");
 
     // Configure StallGuard for rho stepper
     if (_rhoStepper) {
-        _rhoStepper->set_stallguard_threshold(_config.rho.stallguardThreshold);
+        _rhoStepper->set_stallguard_threshold(CONFIG_ROBOT_RHO_STALLGUARD_THRESHOLD);
         _rhoStepper->set_stallguard_min_speed(0xFFFFF);
-        _rhoStepper->set_stallguard_callback(_config.diagPin, rhoStallCallback);
-        ESP_LOGD(TAG, "Configured StallGuard for rho stepper on pin %d (thresh %d)", _config.diagPin, _config.rho.stallguardThreshold);
+        _rhoStepper->set_stallguard_callback((gpio_num_t)CONFIG_ROBOT_RHO_STALLGUARD_DIAG_PIN, rhoStallCallback);
     }
 
     return ESP_OK;
 }
 
 void PolarRobot::deinitHomingHardware() {
-    // Remove GPIO ISR handlers
-    if (_config.theta.endstopPin != GPIO_NUM_NC) {
-        gpio_isr_handler_remove(_config.theta.endstopPin);
-    }
-    // Note: diagPin ISR is now handled by TMC library, no need to remove it here
+    gpio_isr_handler_remove((gpio_num_t)CONFIG_ROBOT_THETA_ENDSTOP_PIN);
 }
 
 // =============================================================================
@@ -82,7 +87,7 @@ esp_err_t PolarRobot::startThetaHoming() {
 
     // Calculate maximum steps for safety (2 full rotations), accounting for microstepping
     const float microstepMultiplier = 16.0f; // TMC configured for 16x microstepping
-    _homingControl.maxSteps = (_config.theta.stepsPerRot * _config.theta.gearRatio * 2) * microstepMultiplier;
+    _homingControl.maxSteps = (CONFIG_ROBOT_THETA_STEPS_PER_ROT * CONFIG_ROBOT_THETA_GEAR_RATIO * 2) * microstepMultiplier;
     _homingControl.stepCount = 0;
 
     // Clear endstop trigger flag
@@ -91,11 +96,11 @@ esp_err_t PolarRobot::startThetaHoming() {
     // Check if already on endstop - if so, back off first
     if (readThetaEndstop()) {
         _homingControl.state = HomingState::THETA_BACKING_OFF;
-        gpio_set_level(_config.theta.dirPin, 0);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, 0);
     }
     else {
         _homingControl.state = HomingState::THETA_SEEKING;
-        gpio_set_level(_config.theta.dirPin, 1);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, 1);
     }
 
     uint64_t homingStepInterval = 1500;
@@ -113,13 +118,13 @@ esp_err_t PolarRobot::startRhoHoming() {
     ESP_LOGI(TAG, "Starting rho homing sequence");
 
     const float microstepMultiplier = 16.0f;
-    _homingControl.maxSteps = _config.rho.stepsPerMm * _config.rho.maxRadius * 2 * microstepMultiplier;
+    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_MM * CONFIG_ROBOT_RHO_MAX_RADIUS * 2 * microstepMultiplier;
     _homingControl.stepCount = 0;
 
     _rhoStallguardTriggered = false;
 
     _homingControl.state = HomingState::RHO_SEEKING;
-    gpio_set_level(_config.rho.dirPin, 0);
+    gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, 0);
 
     uint64_t homingStepInterval = 1500;
     gptimer_alarm_config_t alarm_config = {
@@ -141,7 +146,7 @@ void PolarRobot::processHomingStateMachine() {
     case HomingState::THETA_BACKING_OFF:
         if (!readThetaEndstop()) {
             _homingControl.state = HomingState::THETA_SEEKING;
-            gpio_set_level(_config.theta.dirPin, 1); // Direction towards endstop
+            gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, 1); // Direction towards endstop
             _homingControl.stepCount = 0; // Reset step count for seeking phase
         }
         break;
@@ -224,9 +229,9 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
     case HomingState::THETA_BACKING_OFF:
     case HomingState::THETA_SEEKING:
         // Generate theta step
-        gpio_set_level(_config.theta.stepPin, 1);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN, 1);
         esp_rom_delay_us(2); // Minimum pulse width
-        gpio_set_level(_config.theta.stepPin, 0);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN, 0);
 
         // Update position tracking
         if (_homingControl.state == HomingState::THETA_BACKING_OFF) {
@@ -242,9 +247,9 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
 
     case HomingState::RHO_SEEKING: {
         // Generate rho step
-        gpio_set_level(_config.rho.stepPin, 1);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 1);
         esp_rom_delay_us(2); // Minimum pulse width
-        gpio_set_level(_config.rho.stepPin, 0);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 0);
 
         // Update position tracking (moving towards center)
         int32_t newRhoPos = _rhoPosition - 1;
@@ -267,8 +272,12 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
 // =============================================================================
 
 bool PolarRobot::readThetaEndstop() {
-    int level = gpio_get_level(_config.theta.endstopPin);
-    return _config.theta.endstopInvert ? level : !level;
+    int level = gpio_get_level((gpio_num_t)CONFIG_ROBOT_THETA_ENDSTOP_PIN);
+#if defined(CONFIG_ROBOT_THETA_ENDSTOP_INVERT) && CONFIG_ROBOT_THETA_ENDSTOP_INVERT
+    return (level == 0); // Active low endstop
+#else
+    return (level == 1); // Active high endstop
+#endif
 }
 
 // Static ISR for endstop pin

@@ -1,10 +1,13 @@
 #include "RobotMotionAPI.h"
-#include "RobotCommon.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_log.h"
+
 PolarRobot* RobotMotionSystem::_robot = nullptr;
 bool RobotMotionSystem::_initialized = false;
+
+static const char* LOG_TAG = "RobotMotionSystem";
 
 esp_err_t RobotMotionSystem::init()
 {
@@ -13,7 +16,6 @@ esp_err_t RobotMotionSystem::init()
         return ESP_OK;
     }
 
-#ifdef CONFIG_ROBOT_MOTION_ENABLE
     ESP_LOGI(LOG_TAG, "Initializing Polar Robot Motion System");
 
     _robot = new PolarRobot();
@@ -34,9 +36,9 @@ esp_err_t RobotMotionSystem::init()
     BaseType_t taskResult = xTaskCreate(
         motionTask,
         "robot_motion",
-        CONFIG_ROBOT_MOTION_TASK_STACK_SIZE,  // Configurable stack size
+        8192,  // Configurable stack size
         nullptr,                              // Task parameters
-        CONFIG_ROBOT_MOTION_TASK_PRIORITY,    // Configurable priority
+        4,    // Configurable priority
         nullptr                               // Task handle
     );
 
@@ -49,13 +51,11 @@ esp_err_t RobotMotionSystem::init()
 
     _initialized = true;
     ESP_LOGI(LOG_TAG, "Polar Robot Motion System initialized successfully with FreeRTOS task");
-#else
-    ESP_LOGI(LOG_TAG, "Robot Motion System disabled in config");
-#endif
 
     return ESP_OK;
-}void RobotMotionSystem::deinit()
-{
+}
+
+void RobotMotionSystem::deinit() {
     if (_robot) {
         _robot->deinit();
         delete _robot;
@@ -69,7 +69,7 @@ void RobotMotionSystem::motionTask(void* pvParameters)
 {
     ESP_LOGI(LOG_TAG, "Robot motion task started");
 
-    const TickType_t taskDelay = pdMS_TO_TICKS(CONFIG_ROBOT_MOTION_TASK_INTERVAL_MS);
+    const TickType_t taskDelay = pdMS_TO_TICKS(10);
 
     while (true) {
         if (_robot && _initialized) {

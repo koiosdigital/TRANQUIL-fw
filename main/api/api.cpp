@@ -4,14 +4,14 @@
 #include "esp_http_server.h"
 #include "kd_common.h"
 #include "cJSON.h"
-#include "internet_time.h"
+#include "kd_ntp.h"
 #include "embedded_tz_db.h"
 #include <esp_app_desc.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "static_files.h"
+//#include "static_files.h"
 
 /* Empty handle to esp_http_server */
 httpd_handle_t kd_server = NULL;
@@ -86,7 +86,7 @@ esp_err_t about_handler(httpd_req_t* req) {
 }
 
 esp_err_t system_config_get_handler(httpd_req_t* req) {
-    time_config_t config = time_get_config();
+    time_config_t config = KdNTP::get_config();
     char* wifi_hostname = kd_common_get_wifi_hostname();
 
     // Create JSON response
@@ -138,28 +138,23 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
     }
     content[ret] = '\0';
 
-    // Parse JSON
     cJSON* json = cJSON_Parse(content);
     if (json == NULL) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON format");
         return ESP_FAIL;
     }
 
-    // Get current config as starting point
-    time_config_t new_config = time_get_config();
+    time_config_t new_config = KdNTP::get_config();
 
-    // Validate and extract fields
     cJSON* auto_timezone_json = cJSON_GetObjectItem(json, "auto_timezone");
     cJSON* timezone_json = cJSON_GetObjectItem(json, "timezone");
     cJSON* ntp_server_json = cJSON_GetObjectItem(json, "ntp_server");
     cJSON* wifi_hostname_json = cJSON_GetObjectItem(json, "wifi_hostname");
 
-    // Validate auto_timezone if present
     if (cJSON_IsBool(auto_timezone_json)) {
         new_config.auto_timezone = cJSON_IsTrue(auto_timezone_json);
     }
 
-    // Validate timezone if present
     if (cJSON_IsString(timezone_json)) {
         const char* tz_str = cJSON_GetStringValue(timezone_json);
         if (strlen(tz_str) < sizeof(new_config.timezone)) {
@@ -168,7 +163,6 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
         }
     }
 
-    // Validate ntp_server if present
     if (cJSON_IsString(ntp_server_json)) {
         const char* ntp_str = cJSON_GetStringValue(ntp_server_json);
         if (strlen(ntp_str) < sizeof(new_config.ntp_server)) {
@@ -177,22 +171,16 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
         }
     }
 
-    // Validate wifi_hostname if present
-    bool wifi_hostname_updated = false;
     if (cJSON_IsString(wifi_hostname_json)) {
         const char* hostname_str = cJSON_GetStringValue(wifi_hostname_json);
         if (hostname_str && strlen(hostname_str) > 0 && strlen(hostname_str) <= 63) {
             kd_common_set_wifi_hostname(hostname_str);
-            wifi_hostname_updated = true;
         }
     }
 
     cJSON_Delete(json);
 
-    // Apply configuration
-    time_set_config(&new_config);
-
-    // Create dynamic response message
+    KdNTP::set_config(&new_config);
     cJSON* response_json = cJSON_CreateObject();
     cJSON* status = cJSON_CreateString("success");
     cJSON_AddItemToObject(response_json, "status", status);
@@ -295,6 +283,7 @@ esp_err_t time_zones_handler(httpd_req_t* req) {
 }
 
 // Static file handler function
+/*
 static esp_err_t static_file_handler(httpd_req_t* req) {
     const static_files::file* f = reinterpret_cast<const static_files::file*>(req->user_ctx);
     if (!f) {
@@ -320,6 +309,7 @@ static esp_err_t static_file_handler(httpd_req_t* req) {
     httpd_resp_send(req, reinterpret_cast<const char*>(f->contents), f->size);
     return ESP_OK;
 }
+*/
 
 void api_init() {
     init_mdns();
@@ -358,6 +348,7 @@ void api_init() {
         .user_ctx = NULL
     };    httpd_register_uri_handler(server, &time_zones_uri);
 
+    /*
     // Create an array of httpd_uri_t to keep them alive after the loop
     static httpd_uri_t static_file_uris[static_files::num_of_files + 1]; // +1 for root '/' handler
 
@@ -404,4 +395,5 @@ void api_init() {
         };
         httpd_register_uri_handler(server, &root_uri);
     }
+    */
 }

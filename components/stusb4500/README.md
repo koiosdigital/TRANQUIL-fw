@@ -27,8 +27,6 @@ Component config → STUSB4500 USB-C PD Controller
 - **SDA Pin**: GPIO pin for I2C data line
 - **SCL Pin**: GPIO pin for I2C clock line
 - **I2C Address**: Device address (default 0x28)
-- **I2C Frequency**: Communication speed (default 100kHz)
-- **Monitor Interval**: How often to check status in monitoring tasks
 
 ## Usage
 

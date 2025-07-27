@@ -1,33 +1,5 @@
 menu "Polar Robot Motion System"
-    
-    config ROBOT_MOTION_ENABLE
-        bool "Enable Polar Robot Motion System"
-        default y
-        help
-            Enable the 2-axis polar robot motion system for sand table control.
-
-    menu "Robot Geometry"
-        depends on ROBOT_MOTION_ENABLE
-
-        config ROBOT_ARM_LENGTH_1
-            int "Upper Arm Length (mm)"
-            default 100
-            range 10 500
-            help
-                Length of the upper arm segment in millimeters
-
-        config ROBOT_ARM_LENGTH_2
-            int "Lower Arm Length (mm)"
-            default 100
-            range 10 500
-            help
-                Length of the lower arm segment in millimeters
-
-    endmenu
-
     menu "TMC Stepper Configuration"
-        depends on ROBOT_MOTION_ENABLE
-
         config ROBOT_TMC_UART_PORT
             int "TMC UART Port"
             default 1
@@ -104,42 +76,46 @@ menu "Polar Robot Motion System"
             help
                 GPIO pin for common enable signal (active low - pulled low when motors are running)
 
-        config ROBOT_STALLGUARD_DIAG_PIN
-            int "StallGuard Diagnostic Pin"
+        config ROBOT_RHO_STALLGUARD_DIAG_PIN
+            int "Rho StallGuard Diagnostic Pin"
             default 23
             range 0 48
             help
-                GPIO pin for StallGuard diagnostic signal from TMC drivers
+                GPIO pin for StallGuard diagnostic signal from Rho driver
 
+        config ROBOT_THETA_STALLGUARD_DIAG_PIN
+            int "Theta StallGuard Diagnostic Pin"
+            default 24
+            range 0 48
+            help
+                GPIO pin for StallGuard diagnostic signal from Theta driver
     endmenu
 
     menu "Theta Axis Configuration"
-        depends on ROBOT_MOTION_ENABLE
-
         config ROBOT_THETA_MAX_SPEED
             int "Theta Maximum Speed (RPM)"
-            default 60
-            range 1 300
+            default 15
+            range 1 30
             help
-                Maximum rotational speed for theta axis in RPM
+                Maximum rotational speed for theta axis in RPM (post gearing)
 
         config ROBOT_THETA_MAX_ACCEL
             int "Theta Maximum Acceleration (RPM/s)"
-            default 120
-            range 10 1000
+            default 2
+            range 1 100
             help
-                Maximum acceleration for theta axis in RPM per second
+                Maximum acceleration for theta axis in RPM (post gearing)
 
         config ROBOT_THETA_STEPS_PER_ROT
             int "Theta Steps per Motor Rotation (full steps)"
             default 200
-            range 200 3200
+            range 200 400
             help
                 Number of full motor steps for one complete motor rotation (without microstepping)
 
         config ROBOT_THETA_GEAR_RATIO
             int "Theta Gear Ratio (Motor:Drive ratio x100)"
-            default 500
+            default 800
             range 100 2000
             help
                 Gear ratio from motor to drive gear, multiplied by 100 (e.g., 5:1 ratio = 500)
@@ -147,28 +123,48 @@ menu "Polar Robot Motion System"
         config ROBOT_THETA_MOTOR_CURRENT
             int "Theta Motor Current (mA)"
             default 800
-            range 100 2000
+            range 100 1200
             help
                 Run current for theta motor in milliamps
 
-        config ROBOT_THETA_ENDSTOP_PIN
+        config ROBOT_THETA_INVERT_DIRECTION
+            bool "Invert Theta Motor Direction"
+            default n
+            help
+                Invert the direction signal for the theta motor (set if motor moves opposite to expected)
+
+        config ROBOT_THETA_HAS_ENDSTOP
+            bool "Theta Axis Has Endstop"
+            default y
+            help
+                Enable if the theta axis has an endstop switch installed
+
+        menu "Theta Endstop Configuration"
+            depends on ROBOT_THETA_HAS_ENDSTOP
+
+            config ROBOT_THETA_ENDSTOP_PIN
             int "Theta Endstop GPIO Pin"
             default 4
             range 0 48
             help
                 GPIO pin for theta axis endstop switch
 
-        config ROBOT_THETA_ENDSTOP_INVERT
+            config ROBOT_THETA_ENDSTOP_INVERT
             bool "Invert Theta Endstop Logic"
             default n
             help
                 Invert the logic of theta endstop (normally open vs normally closed)
 
+            config ROBOT_THETA_ENDSTOP_PULLUP
+            bool "Enable Pull-Up for Theta Endstop"
+            default y
+            help
+                Enable internal pull-up resistor for theta endstop pin
+        endmenu
+
     endmenu
 
     menu "Rho Axis Configuration"
-        depends on ROBOT_MOTION_ENABLE
-
         config ROBOT_RHO_MAX_SPEED
             int "Rho Maximum Speed (mm/min)"
             default 600
@@ -181,7 +177,7 @@ menu "Polar Robot Motion System"
             default 1200
             range 100 5000
             help
-                Maximum acceleration for rho axis in mm per minute squared
+                Maximum acceleration for rho axis in mm/min ^2
 
         config ROBOT_RHO_STEPS_PER_MM
             int "Rho Steps per Millimeter (full steps)"
@@ -193,23 +189,16 @@ menu "Polar Robot Motion System"
         config ROBOT_RHO_STEPS_PER_ROT
             int "Rho Steps per Motor Rotation (full steps)"
             default 200
-            range 200 3200
+            range 200 400
             help
                 Number of full motor steps for one complete motor rotation (without microstepping)
 
         config ROBOT_RHO_MOTOR_CURRENT
             int "Rho Motor Current (mA)"
             default 600
-            range 100 2000
+            range 100 1200
             help
                 Run current for rho motor in milliamps
-
-        config ROBOT_RHO_MIN_RADIUS
-            int "Rho Minimum Radius (mm)"
-            default 10
-            range 0 100
-            help
-                Minimum allowed radius for rho axis movement
 
         config ROBOT_RHO_MAX_RADIUS
             int "Rho Maximum Radius (mm)"
@@ -218,64 +207,19 @@ menu "Polar Robot Motion System"
             help
                 Maximum allowed radius for rho axis movement
 
+        config ROBOT_RHO_INVERT_DIRECTION
+            bool "Invert Rho Motor Direction"
+            default n
+            help
+                Invert the direction signal for the rho motor (set if motor moves opposite to expected)
+            
+        menu "StallGuard Configuration"
+            config ROBOT_RHO_STALLGUARD_THRESHOLD
+                int "Rho StallGuard Threshold"
+                default 200
+                range 0 255
+                help
+                    StallGuard4 sensitivity threshold for rho axis homing (higher = less sensitive, typical range 150-255)
+        endmenu
     endmenu
-
-    menu "StallGuard Configuration"
-        depends on ROBOT_MOTION_ENABLE
-
-        config ROBOT_RHO_STALLGUARD_THRESHOLD
-            int "Rho StallGuard Threshold"
-            default 128
-            range 0 255
-            help
-                StallGuard sensitivity threshold for rho axis homing (higher = less sensitive)
-    endmenu
-
-    menu "Motion Planning"
-        depends on ROBOT_MOTION_ENABLE
-
-        config ROBOT_MOTION_TASK_PRIORITY
-            int "Motion Task Priority"
-            default 5
-            range 1 25
-            help
-                FreeRTOS task priority for the motion control task (higher = more priority)
-
-        config ROBOT_MOTION_TASK_STACK_SIZE
-            int "Motion Task Stack Size"
-            default 8192
-            range 4096 16384
-            help
-                Stack size for the motion control task in bytes
-
-        config ROBOT_MOTION_TASK_INTERVAL_MS
-            int "Motion Task Service Interval (ms)"
-            default 10
-            range 1 100
-            help
-                How often the motion task runs in milliseconds (lower = more responsive)
-
-        config ROBOT_MOTION_PIPELINE_LENGTH
-            int "Motion Pipeline Length"
-            default 100
-            range 10 500
-            help
-                Number of motion blocks that can be queued for smooth motion
-
-        config ROBOT_JUNCTION_DEVIATION
-            int "Junction Deviation (micrometers)"
-            default 50
-            range 1 1000
-            help
-                Maximum deviation allowed at path junctions in micrometers
-
-        config ROBOT_BLOCK_DISTANCE_MM
-            int "Block Distance (micrometers)"
-            default 0
-            range 0 10000
-            help
-                Minimum distance for motion planning blocks in micrometers (0 = auto)
-
-    endmenu
-
 endmenu

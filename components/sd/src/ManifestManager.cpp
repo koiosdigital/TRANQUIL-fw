@@ -2,7 +2,6 @@
 #include "sd.h"
 #include "esp_log.h"
 #include "esp_random.h"
-#include "esp_timer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -186,19 +185,6 @@ std::string ManifestManager::generateUUID() {
         (unsigned int)(random3 & 0xFFFF));
 
     return std::string(uuid_str);
-}
-
-std::string ManifestManager::getCurrentDateString() {
-    int64_t time_us = esp_timer_get_time();
-    time_t time_s = time_us / 1000000;
-
-    struct tm timeinfo;
-    gmtime_r(&time_s, &timeinfo);
-
-    char date_str[32]; // Enough for ISO 8601 format
-    strftime(date_str, sizeof(date_str), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
-
-    return std::string(date_str);
 }
 
 cJSON* ManifestManager::patternToJson(const Pattern& pattern) {

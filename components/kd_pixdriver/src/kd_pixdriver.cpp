@@ -1,15 +1,32 @@
 #include "kd_pixdriver.h"
 #include "pixel_effects.h"
-#include "rmt_led_encoder.h"
+#include "i2s_pixel_protocol.h"
 #include "esp_log.h"
 #include "nvs.h"
-#include "driver/rmt_tx.h"
+#include "driver/i2s_std.h"
+#include "driver/i2s_common.h"
 #include <algorithm>
 #include <cstring>
 #include <cmath>
 
 static const char* TAG = "kd_pixdriver";
 static const char* NVS_NAMESPACE = "pixdriver";
+
+// I2S callback function
+extern "C" IRAM_ATTR bool i2s_tx_callback(i2s_chan_handle_t handle, i2s_event_data_t* event, void* user_ctx) {
+    PixelChannel* channel = static_cast<PixelChannel*>(user_ctx);
+
+    if (channel && event) {
+        channel->bytes_sent_ += event->size;
+        if (channel->bytes_sent_ >= channel->i2s_buffer_.size()) {
+            // Signal that transmission is complete
+            BaseType_t higher_priority_task_woken = pdFALSE;
+            xSemaphoreGiveFromISR(channel->complete_semaphore_, &higher_priority_task_woken);
+        }
+    }
+
+    return false;
+}
 
 // PixelColor implementation
 PixelColor PixelColor::fromHSV(uint8_t hue, uint8_t saturation, uint8_t value) {
@@ -239,7 +256,7 @@ void PixelDriver::applyCurrentLimiting() {
 
 // PixelChannel implementation
 PixelChannel::PixelChannel(int32_t id, const ChannelConfig& config)
-    : id_(id), config_(config), initialized_(false) {
+    : id_(id), config_(config), initialized_(false), terminate_task_(false), bytes_sent_(0) {
 
     pixel_buffer_.resize(config.pixel_count, PixelColor(0, 0, 0, 0));
     scaled_buffer_.resize(config.pixel_count, PixelColor(0, 0, 0, 0));
@@ -259,9 +276,38 @@ PixelChannel::~PixelChannel() {
 bool PixelChannel::initialize() {
     if (initialized_) return true;
 
-    setupRMT();
+    // Create semaphores
+    transmit_semaphore_ = xSemaphoreCreateBinary();
+    complete_semaphore_ = xSemaphoreCreateBinary();
+
+    if (!transmit_semaphore_ || !complete_semaphore_) {
+        ESP_LOGE(TAG, "Failed to create semaphores for channel %ld", id_);
+        cleanup();
+        return false;
+    }
+
+    // Setup I2S
+    setupI2S();
+
+    if (!i2s_channel_) {
+        ESP_LOGE(TAG, "Failed to setup I2S for channel %ld", id_);
+        cleanup();
+        return false;
+    }
+
+    // Create I2S task
+    char task_name[32];
+    snprintf(task_name, sizeof(task_name), "i2s_ch_%ld", id_);
+
+    if (xTaskCreate(i2sTaskWrapper, task_name, 8192, this,
+        configMAX_PRIORITIES - 1, &i2s_task_handle_) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create I2S task for channel %ld", id_);
+        cleanup();
+        return false;
+    }
+
     initialized_ = true;
-    ESP_LOGI(TAG, "Channel %ld initialized successfully", id_);
+    ESP_LOGI(TAG, "Initialized channel %ld with I2S", id_);
     return true;
 }
 
@@ -306,52 +352,105 @@ void PixelChannel::clearMask() {
     effect_config_.mask.clear();
 }
 
-void PixelChannel::setupRMT() {
-    // Create RMT TX channel
-    rmt_tx_channel_config_t tx_config = {
-        .gpio_num = config_.pin,
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = config_.resolution_hz,
-        .mem_block_symbols = 64,
-        .trans_queue_depth = 4,
+void PixelChannel::setupI2S() {
+    // Create I2S TX channel
+    i2s_chan_config_t chan_config = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+
+    i2s_std_config_t std_config = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(WS2812B_BITRATE / 16 / 2), // 16-bit, 2 channels per slot
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = I2S_GPIO_UNUSED,
+            .ws = I2S_GPIO_UNUSED,
+            .dout = config_.pin,
+            .din = I2S_GPIO_UNUSED,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
     };
 
-    rmt_channel_handle_t rmt_handle = nullptr;
-    ESP_ERROR_CHECK(rmt_new_tx_channel(&tx_config, &rmt_handle));
-    rmt_channel_ = rmt_handle;
+    esp_err_t ret = i2s_new_channel(&chan_config, &i2s_channel_, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create I2S channel for pin %d: %s", config_.pin, esp_err_to_name(ret));
+        return;
+    }
 
-    // Create LED strip encoder
-    RMTLedEncoderConfig encoder_config = {
-        .resolution_hz = config_.resolution_hz
+    ret = i2s_channel_init_std_mode(i2s_channel_, &std_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init I2S std mode: %s", esp_err_to_name(ret));
+        i2s_del_channel(i2s_channel_);
+        i2s_channel_ = nullptr;
+        return;
+    }
+
+    // Register I2S event callbacks
+    i2s_event_callbacks_t callbacks = {
+        .on_recv = nullptr,
+        .on_recv_q_ovf = nullptr,
+        .on_sent = i2s_tx_callback,
+        .on_send_q_ovf = nullptr,
     };
 
-    rmt_encoder_handle_t encoder_handle = nullptr;
-    ESP_ERROR_CHECK(kd_rmt_new_led_strip_encoder(&encoder_config, &encoder_handle));
-    rmt_encoder_ = encoder_handle;
-
-    ESP_ERROR_CHECK(rmt_enable(rmt_handle));
+    ret = i2s_channel_register_event_callback(i2s_channel_, &callbacks, this);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register I2S callbacks: %s", esp_err_to_name(ret));
+        i2s_del_channel(i2s_channel_);
+        i2s_channel_ = nullptr;
+        return;
+    }
 }
 
 void PixelChannel::cleanup() {
     if (initialized_) {
-        if (rmt_channel_) {
-            rmt_disable(*(rmt_channel_handle_t*)&rmt_channel_);
-            rmt_del_channel(*(rmt_channel_handle_t*)&rmt_channel_);
-            rmt_channel_ = nullptr;
+        // Signal task to terminate
+        terminate_task_ = true;
+        if (transmit_semaphore_) {
+            xSemaphoreGive(transmit_semaphore_);
         }
 
-        if (rmt_encoder_) {
-            rmt_del_encoder(*(rmt_encoder_handle_t*)&rmt_encoder_);
-            rmt_encoder_ = nullptr;
+        // Wait for task to terminate
+        if (i2s_task_handle_) {
+            for (int i = 0; i < 100 && terminate_task_; ++i) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            if (terminate_task_) {
+                ESP_LOGW(TAG, "I2S task did not terminate gracefully for channel %ld", id_);
+                vTaskDelete(i2s_task_handle_);
+            }
+            i2s_task_handle_ = nullptr;
+        }
+
+        // Clean up I2S
+        if (i2s_channel_) {
+            i2s_del_channel(i2s_channel_);
+            i2s_channel_ = nullptr;
+        }
+
+        // Clean up semaphores
+        if (transmit_semaphore_) {
+            vSemaphoreDelete(transmit_semaphore_);
+            transmit_semaphore_ = nullptr;
+        }
+        if (complete_semaphore_) {
+            vSemaphoreDelete(complete_semaphore_);
+            complete_semaphore_ = nullptr;
         }
 
         initialized_ = false;
+        terminate_task_ = false;
     }
 }
 
-std::vector<uint8_t> PixelChannel::convertToRMTBuffer(const std::vector<PixelColor>& pixels) {
-    size_t bytes_per_pixel = static_cast<size_t>(config_.format);
-    rmt_buffer_.resize(pixels.size() * bytes_per_pixel);
+std::vector<uint8_t> PixelChannel::convertToI2SBuffer(const std::vector<PixelColor>& pixels) {
+    size_t bytes_per_pixel = (config_.format == PixelFormat::RGBW) ? WS2812B_BYTES_PER_RGBW : WS2812B_BYTES_PER_RGB;
+    size_t buffer_size = (pixels.size() * bytes_per_pixel) + WS2812B_RESET_BYTES;
+
+    i2s_buffer_.resize(buffer_size);
+    memset(i2s_buffer_.data(), 0, buffer_size); // Initialize reset bytes
 
     for (size_t i = 0; i < pixels.size(); ++i) {
         const auto& pixel = pixels[i];
@@ -361,46 +460,44 @@ std::vector<uint8_t> PixelChannel::convertToRMTBuffer(const std::vector<PixelCol
         bool masked = effect_config_.mask.empty() ||
             (i < effect_config_.mask.size() && effect_config_.mask[i]);
 
-        if (config_.format == PixelFormat::RGBW) {
-            // GRBW order for WS2812-style LEDs
-            rmt_buffer_[base_idx + 0] = masked ? pixel.g : 0;
-            rmt_buffer_[base_idx + 1] = masked ? pixel.r : 0;
-            rmt_buffer_[base_idx + 2] = masked ? pixel.b : 0;
-            rmt_buffer_[base_idx + 3] = masked ? pixel.w : 0;
+        uint8_t g_val = masked ? pixel.g : 0;
+        uint8_t r_val = masked ? pixel.r : 0;
+        uint8_t b_val = masked ? pixel.b : 0;
+        uint8_t w_val = masked ? pixel.w : 0;
+
+        // Convert colors using lookup table - GRB order for WS2812
+        const uint8_t* g_sequence = ws2812b_color_lookup[g_val];
+        const uint8_t* r_sequence = ws2812b_color_lookup[r_val];
+        const uint8_t* b_sequence = ws2812b_color_lookup[b_val];
+
+        // Copy G, R, B sequences with proper byte ordering for I2S
+        for (int j = 0; j < WS2812B_BYTES_PER_COLOR; ++j) {
+            i2s_buffer_[(base_idx + j) ^ 1] = g_sequence[j];
+            i2s_buffer_[(base_idx + WS2812B_BYTES_PER_COLOR + j) ^ 1] = r_sequence[j];
+            i2s_buffer_[(base_idx + 2 * WS2812B_BYTES_PER_COLOR + j) ^ 1] = b_sequence[j];
         }
-        else {
-            // GRB order for WS2812-style LEDs
-            rmt_buffer_[base_idx + 0] = masked ? pixel.g : 0;
-            rmt_buffer_[base_idx + 1] = masked ? pixel.r : 0;
-            rmt_buffer_[base_idx + 2] = masked ? pixel.b : 0;
+
+        // Add white channel for RGBW
+        if (config_.format == PixelFormat::RGBW) {
+            const uint8_t* w_sequence = ws2812b_color_lookup[w_val];
+            for (int j = 0; j < WS2812B_BYTES_PER_COLOR; ++j) {
+                i2s_buffer_[(base_idx + 3 * WS2812B_BYTES_PER_COLOR + j) ^ 1] = w_sequence[j];
+            }
         }
     }
 
-    return rmt_buffer_;
+    return i2s_buffer_;
 }
 
 void PixelChannel::transmit() {
     if (!initialized_ || !effect_config_.enabled) return;
 
-    auto buffer_to_transmit = convertToRMTBuffer(scaled_buffer_);
+    convertToI2SBuffer(scaled_buffer_);
 
-    rmt_transmit_config_t tx_config = {
-        .loop_count = 0,
-    };
-
-    ESP_ERROR_CHECK(rmt_transmit(
-        *(rmt_channel_handle_t*)&rmt_channel_,
-        *(rmt_encoder_handle_t*)&rmt_encoder_,
-        buffer_to_transmit.data(),
-        buffer_to_transmit.size(),
-        &tx_config
-    ));
-
-    // Wait for transmission to complete
-    ESP_ERROR_CHECK(rmt_tx_wait_all_done(
-        *(rmt_channel_handle_t*)&rmt_channel_,
-        portMAX_DELAY
-    ));
+    // Signal I2S task to transmit
+    if (transmit_semaphore_) {
+        xSemaphoreGive(transmit_semaphore_);
+    }
 }
 
 uint32_t PixelChannel::getCurrentConsumption() const {
@@ -481,4 +578,67 @@ void PixelChannel::loadFromNVS() {
     }
 
     nvs_close(nvs_handle);
+}
+
+void PixelChannel::i2sTaskWrapper(void* param) {
+    static_cast<PixelChannel*>(param)->i2sTask();
+}
+
+void PixelChannel::i2sTask() {
+    std::vector<uint8_t> local_buffer;
+    size_t bytes_written;
+
+    ESP_LOGD(TAG, "I2S task started for channel %ld", id_);
+
+    while (!terminate_task_) {
+        // Wait for transmission request
+        if (xSemaphoreTake(transmit_semaphore_, portMAX_DELAY) != pdTRUE) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        if (terminate_task_) {
+            break;
+        }
+
+        // Make a local copy of the buffer
+        local_buffer = i2s_buffer_;
+        bytes_sent_ = 0;
+
+        // Preload and enable I2S
+        esp_err_t ret = i2s_channel_preload_data(i2s_channel_, local_buffer.data(),
+            local_buffer.size(), &bytes_written);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to preload I2S data: %s", esp_err_to_name(ret));
+            continue;
+        }
+
+        ret = i2s_channel_enable(i2s_channel_);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to enable I2S channel: %s", esp_err_to_name(ret));
+            continue;
+        }
+
+        // Write remaining data if any
+        if (bytes_written < local_buffer.size()) {
+            ret = i2s_channel_write(i2s_channel_,
+                &local_buffer[bytes_written],
+                local_buffer.size() - bytes_written,
+                &bytes_written,
+                pdMS_TO_TICKS(1000));
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "I2S write timeout or error: %s", esp_err_to_name(ret));
+            }
+        }
+
+        // Wait for transmission to complete
+        xSemaphoreTake(complete_semaphore_, portMAX_DELAY);
+
+        // Disable I2S channel
+        i2s_channel_disable(i2s_channel_);
+    }
+
+    ESP_LOGD(TAG, "I2S task finished for channel %ld", id_);
+    terminate_task_ = false;
+    vTaskDelete(nullptr);
 }

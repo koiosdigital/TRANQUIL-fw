@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "RobotCommon.h"
 #include "tmc2209.h"
 #include "uartbus.h"
 
@@ -42,7 +41,6 @@ struct MotorStatus {
     bool isEnabled;
     bool isHomed;
     bool isStalled;
-    uint16_t current;     // mA
 };
 
 // Robot status
@@ -112,52 +110,12 @@ public:
     // Coordinate transformations
     static CartesianPoint polarToCartesian(const PolarPoint& polar);
     static PolarPoint cartesianToPolar(const CartesianPoint& cartesian);
-    static bool isInBounds(const PolarPoint& polar, float minRadius, float maxRadius);
+    static bool isInBounds(const PolarPoint& polar, float maxRadius);
 
     // Service - call regularly from main task
     void service();
 
 private:
-    // Configuration from Kconfig
-    struct Config {
-        // Geometry
-        float armLength1, armLength2;
-
-        // TMC Configuration  
-        uart_port_t uartPort;
-        gpio_num_t txPin, rxPin;
-        gpio_num_t enablePin;     // Common enable pin (active low)
-        gpio_num_t diagPin;       // StallGuard diagnostic pin
-        uint32_t baudRate;
-        uint8_t thetaAddr, rhoAddr;
-
-        // Motor parameters
-        struct {
-            float maxSpeed, maxAccel;     // RPM, RPM/s
-            int32_t stepsPerRot;          // Motor steps per motor revolution
-            float gearRatio;              // Motor:drive gear ratio (e.g., 5:1 = 5.0)
-            uint16_t current;
-            gpio_num_t endstopPin;
-            gpio_num_t stepPin, dirPin;   // Step and direction pins
-            bool endstopInvert;
-        } theta;
-
-        struct {
-            float maxSpeed, maxAccel;     // mm/min, mm/min²
-            int32_t stepsPerMm;           // Motor steps per mm of rack movement
-            int32_t stepsPerRot;          // Motor steps per motor revolution
-            uint16_t current;
-            gpio_num_t stepPin, dirPin;   // Step and direction pins
-            float minRadius, maxRadius;
-            int8_t stallguardThreshold;
-        } rho;
-
-        // Motion planning
-        int pipelineLength;
-        float junctionDeviation;
-        float blockDistance;
-    } _config;
-
     // Hardware interfaces
     UartBus* _tmcBus;
     TMC2209Stepper* _thetaStepper;
@@ -256,8 +214,6 @@ private:
         }
     } _homingControl;
 
-    // Private methods
-    void loadConfig();
     esp_err_t initTMC();
     esp_err_t initTimer();
     esp_err_t initGPIO();

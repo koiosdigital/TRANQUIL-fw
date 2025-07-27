@@ -1,11 +1,14 @@
 # KD PixDriver
 
-A modern, efficient C++ component for driving WS2812/WS2813 LED strips with multiple channel support, current limiting, and advanced effects.
+A modern, efficient C++ component for driving WS2812/WS2813 LED strips using I2S peripheral with multiple channel support, current limiting, and advanced effects.
 
 ## Features
 
 ### Core Features
+
+- **I2S-based transmission**: Uses ESP32's I2S peripheral for precise timing and high throughput
 - **Multi-channel support**: Drive multiple independent LED strips
+- **RGB and RGBW support**: Handles both 3-channel (RGB) and 4-channel (RGBW) LED strips
 - **Current limiting**: Automatic power management with configurable limits
 - **Modern C++ design**: Type-safe, RAII-compliant implementation
 - **C compatibility layer**: Easy integration with existing C code
@@ -13,6 +16,7 @@ A modern, efficient C++ component for driving WS2812/WS2813 LED strips with mult
 - **NVS persistence**: Automatic configuration saving/loading
 
 ### Effects
+
 - Solid color
 - Blink
 - Breathe (smooth fade in/out)
@@ -24,6 +28,7 @@ A modern, efficient C++ component for driving WS2812/WS2813 LED strips with mult
 - Custom effects (callback-based)
 
 ### Advanced Features
+
 - **Pixel masking**: Enable/disable individual pixels per channel
 - **Current limiting**: Reserve power for other system components
 - **Dual buffering**: Separate display and processing buffers
@@ -41,14 +46,14 @@ using namespace kd;
 void app_main() {
     // Create driver instance
     PixelDriver driver(60); // 60Hz update rate
-    
+
     // Configure LED strip channel
     ChannelConfig config(GPIO_NUM_5, 30, PixelFormat::RGB);
     int32_t channel_id = driver.addChannel(config);
-    
+
     // Set current limit to 2A (2000mA)
     driver.setCurrentLimit(2000);
-    
+
     // Get channel and set effect
     auto* channel = driver.getChannel(channel_id);
     if (channel) {
@@ -58,7 +63,7 @@ void app_main() {
         effect.speed = 5;
         channel->setEffect(effect);
     }
-    
+
     // Start the driver
     driver.start();
 }
@@ -72,7 +77,7 @@ void app_main() {
 void app_main() {
     // Create driver
     kd_pixdriver_handle_t driver = kd_pixdriver_create(60);
-    
+
     // Add channel
     kd_channel_config_t config = {
         .pin = GPIO_NUM_5,
@@ -81,10 +86,10 @@ void app_main() {
         .resolution_hz = 10000000
     };
     int32_t channel_id = kd_pixdriver_add_channel(driver, &config);
-    
+
     // Set current limit
     kd_pixdriver_set_current_limit(driver, 2000);
-    
+
     // Configure effect
     kd_effect_config_t effect = {
         .effect = KD_PIXEL_EFFECT_RAINBOW,
@@ -94,7 +99,7 @@ void app_main() {
         .enabled = true
     };
     kd_pixdriver_set_channel_effect(driver, channel_id, &effect);
-    
+
     // Start driver
     kd_pixdriver_start(driver);
 }
@@ -115,6 +120,7 @@ float scale_factor = driver.getCurrentScaleFactor();
 ```
 
 Current calculations:
+
 - Each color channel at full brightness (255) consumes 20mA
 - RGB pixel at full white: 60mA
 - RGBW pixel at full white: 80mA
@@ -176,6 +182,7 @@ channel->setMask(mask);
 ## Thread Safety
 
 The driver uses FreeRTOS tasks and is designed for:
+
 - **Configuration**: Thread-safe (can be called from any task)
 - **Effect updates**: Handled by dedicated driver task
 - **NVS operations**: Atomic save/load operations
@@ -183,8 +190,9 @@ The driver uses FreeRTOS tasks and is designed for:
 ## Power Considerations
 
 Current limiting helps prevent:
+
 - Power supply overload
-- Voltage drop issues  
+- Voltage drop issues
 - System brownouts
 - Excessive heat generation
 
@@ -193,6 +201,7 @@ The driver automatically scales pixel brightness to stay within current limits w
 ## Integration with Existing Code
 
 The component provides both C++ and C interfaces for easy integration:
+
 - Use C++ interface for new code (recommended)
 - Use C interface for integration with existing C codebases
 - Drop-in replacement for basic LED strip functionality
@@ -201,9 +210,37 @@ The component provides both C++ and C interfaces for easy integration:
 ## Configuration Persistence
 
 Channel configurations are automatically saved to NVS and restored on boot:
+
 - Effect type and parameters
 - Color and brightness settings
 - Enable/disable state
 - Speed settings
 
 No manual save/load calls required - configurations persist across reboots automatically.
+
+## I2S Migration
+
+This component has been migrated from RMT to I2S peripheral for improved performance and compatibility. The I2S implementation provides:
+
+### Benefits of I2S over RMT
+
+- **Better timing precision**: I2S provides more consistent timing for LED protocols
+- **Lower CPU overhead**: Reduced interrupt frequency and processing overhead
+- **Higher throughput**: Support for larger LED arrays with better performance
+- **Compatibility**: Aligned with zorxx_neopixel component architecture
+- **Resource efficiency**: Better utilization of ESP32 hardware resources
+
+### I2S Protocol Implementation
+
+- Uses lookup table-based color encoding for optimal performance
+- 16-bit stereo I2S mode with proper byte ordering for WS2812B compatibility
+- Automatic reset sequence generation for proper LED strip timing
+- Support for both RGB (9 bytes per pixel) and RGBW (12 bytes per pixel) formats
+- Configurable bitrate (default: 2.6 Mbps) for WS2812B timing compliance
+
+### Migration Notes
+
+- API remains unchanged - existing code will work without modifications
+- Configuration and usage patterns are identical to the RMT version
+- Performance improvements are automatic and transparent
+- No changes required to user application code

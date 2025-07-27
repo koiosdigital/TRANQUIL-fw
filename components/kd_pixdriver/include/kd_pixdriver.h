@@ -6,8 +6,17 @@
 #include <functional>
 #include <string>
 #include "driver/gpio.h"
+#include "driver/i2s_std.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+
+// Forward declarations
+class PixelChannel;
+class PixelEffectEngine;
+
+// I2S callback function
+extern "C" bool i2s_tx_callback(i2s_chan_handle_t handle, i2s_event_data_t* event, void* user_ctx);
 
 enum class PixelFormat : uint8_t {
     RGB = 3,
@@ -127,6 +136,9 @@ public:
     PixelChannel(int32_t id, const ChannelConfig& config);
     ~PixelChannel();
 
+    // Friend function for I2S callback
+    friend bool i2s_tx_callback(i2s_chan_handle_t handle, i2s_event_data_t* event, void* user_ctx);
+
     // Configuration
     int32_t getId() const { return id_; }
     const ChannelConfig& getConfig() const { return config_; }
@@ -157,9 +169,12 @@ public:
     void loadFromNVS();
 
 private:
-    void setupRMT();
+    void setupI2S();
     void cleanup();
-    std::vector<uint8_t> convertToRMTBuffer(const std::vector<PixelColor>& pixels);
+    std::vector<uint8_t> convertToI2SBuffer(const std::vector<PixelColor>& pixels);
+    static void i2sTaskWrapper(void* param);
+    void i2sTask();
+    static bool i2sTxCallback(i2s_chan_handle_t handle, i2s_event_data_t* event, void* user_ctx);
 
     int32_t id_;
     ChannelConfig config_;
@@ -167,9 +182,13 @@ private:
 
     std::vector<PixelColor> pixel_buffer_;
     std::vector<PixelColor> scaled_buffer_;
-    std::vector<uint8_t> rmt_buffer_;
+    std::vector<uint8_t> i2s_buffer_;
 
-    void* rmt_channel_ = nullptr;
-    void* rmt_encoder_ = nullptr;
+    i2s_chan_handle_t i2s_channel_ = nullptr;
+    SemaphoreHandle_t transmit_semaphore_ = nullptr;
+    SemaphoreHandle_t complete_semaphore_ = nullptr;
+    TaskHandle_t i2s_task_handle_ = nullptr;
     bool initialized_ = false;
+    bool terminate_task_ = false;
+    size_t bytes_sent_ = 0;
 };

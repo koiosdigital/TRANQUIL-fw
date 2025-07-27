@@ -44,72 +44,11 @@ PolarRobot::PolarRobot()
     , _maxQueueSize(500) // Default fallback size
 {
     g_robotInstance = this;
-    loadConfig();
 }
 
 PolarRobot::~PolarRobot() {
     deinit();
     g_robotInstance = nullptr;
-}
-
-void PolarRobot::loadConfig() {
-    // Load configuration from Kconfig
-    _config.armLength1 = CONFIG_ROBOT_ARM_LENGTH_1;
-    _config.armLength2 = CONFIG_ROBOT_ARM_LENGTH_2;
-
-    _config.uartPort = (uart_port_t)CONFIG_ROBOT_TMC_UART_PORT;
-    _config.txPin = (gpio_num_t)CONFIG_ROBOT_TMC_UART_TX_PIN;
-    _config.rxPin = (gpio_num_t)CONFIG_ROBOT_TMC_UART_RX_PIN;
-#ifdef CONFIG_ROBOT_COMMON_ENABLE_PIN
-    _config.enablePin = (gpio_num_t)CONFIG_ROBOT_COMMON_ENABLE_PIN;
-#else
-    _config.enablePin = GPIO_NUM_NC; // Default if not configured
-#endif
-#ifdef CONFIG_ROBOT_STALLGUARD_DIAG_PIN
-    _config.diagPin = (gpio_num_t)CONFIG_ROBOT_STALLGUARD_DIAG_PIN;
-#else
-    _config.diagPin = GPIO_NUM_NC;
-#endif
-    _config.baudRate = CONFIG_ROBOT_TMC_BAUD_RATE;
-    _config.thetaAddr = CONFIG_ROBOT_THETA_TMC_ADDR;
-    _config.rhoAddr = CONFIG_ROBOT_RHO_TMC_ADDR;
-
-    // Theta axis
-    _config.theta.maxSpeed = CONFIG_ROBOT_THETA_MAX_SPEED;
-    _config.theta.maxAccel = CONFIG_ROBOT_THETA_MAX_ACCEL;
-    _config.theta.stepsPerRot = CONFIG_ROBOT_THETA_STEPS_PER_ROT;
-#ifdef CONFIG_ROBOT_THETA_GEAR_RATIO
-    _config.theta.gearRatio = CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f; // Convert from integer to float
-#else
-    _config.theta.gearRatio = 1.0f; // Default to 1:1 if not configured
-#endif
-    _config.theta.current = CONFIG_ROBOT_THETA_MOTOR_CURRENT;
-    _config.theta.endstopPin = (gpio_num_t)CONFIG_ROBOT_THETA_ENDSTOP_PIN;
-    _config.theta.stepPin = (gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN;
-    _config.theta.dirPin = (gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN;
-
-#if defined(CONFIG_ROBOT_THETA_ENDSTOP_INVERT) && CONFIG_ROBOT_THETA_ENDSTOP_INVERT
-    _config.theta.endstopInvert = true;
-#else
-    _config.theta.endstopInvert = false;
-#endif
-
-    // Rho axis
-    _config.rho.maxSpeed = CONFIG_ROBOT_RHO_MAX_SPEED;
-    _config.rho.maxAccel = CONFIG_ROBOT_RHO_MAX_ACCEL;
-    _config.rho.stepsPerMm = CONFIG_ROBOT_RHO_STEPS_PER_MM;
-    _config.rho.stepsPerRot = CONFIG_ROBOT_RHO_STEPS_PER_ROT;
-    _config.rho.current = CONFIG_ROBOT_RHO_MOTOR_CURRENT;
-    _config.rho.stepPin = (gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN;
-    _config.rho.dirPin = (gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN;
-    _config.rho.minRadius = CONFIG_ROBOT_RHO_MIN_RADIUS;
-    _config.rho.maxRadius = CONFIG_ROBOT_RHO_MAX_RADIUS;
-    _config.rho.stallguardThreshold = CONFIG_ROBOT_RHO_STALLGUARD_THRESHOLD;
-
-    // Motion planning
-    _config.pipelineLength = CONFIG_ROBOT_MOTION_PIPELINE_LENGTH;
-    _config.junctionDeviation = CONFIG_ROBOT_JUNCTION_DEVIATION / 1000.0f; // Convert from μm
-    _config.blockDistance = CONFIG_ROBOT_BLOCK_DISTANCE_MM / 1000.0f; // Convert from μm
 }
 
 esp_err_t PolarRobot::init() {
@@ -150,29 +89,28 @@ esp_err_t PolarRobot::initTMC() {
         return ESP_ERR_NO_MEM;
     }
 
-    ESP_RETURN_ON_ERROR(_tmcBus->initialize(_config.uartPort, _config.txPin, _config.rxPin, _config.baudRate),
-        TAG, "Failed to init TMC UART bus");
+    _tmcBus->initialize((uart_port_t)CONFIG_ROBOT_TMC_UART_PORT, (gpio_num_t)CONFIG_ROBOT_TMC_UART_TX_PIN, (gpio_num_t)CONFIG_ROBOT_TMC_UART_RX_PIN, CONFIG_ROBOT_TMC_BAUD_RATE);
 
     // Create theta stepper
-    _thetaStepper = new TMC2209Stepper(*_tmcBus, _config.thetaAddr);
+    _thetaStepper = new TMC2209Stepper(*_tmcBus, CONFIG_ROBOT_THETA_TMC_ADDR);
     if (!_thetaStepper) {
         return ESP_ERR_NO_MEM;
     }
 
     ESP_RETURN_ON_ERROR(_thetaStepper->initialize(), TAG, "Failed to init theta stepper");
-    _thetaStepper->set_motor_current(_config.theta.current);
+    _thetaStepper->set_motor_current(CONFIG_ROBOT_THETA_MOTOR_CURRENT);
     _thetaStepper->set_microstep_resolution(MicrostepResolution::SIXTEENTH);
     _thetaStepper->set_stealthchop_enable(true);
     _thetaStepper->set_stealthchop_threshold(0);
 
     // Create rho stepper with StallGuard
-    _rhoStepper = new TMC2209Stepper(*_tmcBus, _config.rhoAddr);
+    _rhoStepper = new TMC2209Stepper(*_tmcBus, CONFIG_ROBOT_RHO_TMC_ADDR);
     if (!_rhoStepper) {
         return ESP_ERR_NO_MEM;
     }
 
     ESP_RETURN_ON_ERROR(_rhoStepper->initialize(), TAG, "Failed to init rho stepper");
-    _rhoStepper->set_motor_current(_config.rho.current);
+    _rhoStepper->set_motor_current(CONFIG_ROBOT_RHO_MOTOR_CURRENT);
     _rhoStepper->set_microstep_resolution(MicrostepResolution::SIXTEENTH);
     _rhoStepper->set_stealthchop_enable(true);
     _rhoStepper->set_stealthchop_threshold(0);
@@ -201,9 +139,9 @@ esp_err_t PolarRobot::initTimer() {
 }
 
 esp_err_t PolarRobot::initGPIO() {
-    if (_config.enablePin != GPIO_NUM_NC) {
+    if (CONFIG_ROBOT_COMMON_ENABLE_PIN != GPIO_NUM_NC) {
         gpio_config_t enable_config = {
-            .pin_bit_mask = (1ULL << _config.enablePin),
+            .pin_bit_mask = (1ULL << CONFIG_ROBOT_COMMON_ENABLE_PIN),
             .mode = GPIO_MODE_OUTPUT,
             .pull_up_en = GPIO_PULLUP_ENABLE,
             .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -211,31 +149,31 @@ esp_err_t PolarRobot::initGPIO() {
         };
         ESP_RETURN_ON_ERROR(gpio_config(&enable_config), TAG, "Failed to configure enable pin");
 
-        gpio_set_level(_config.enablePin, 1);
-        ESP_LOGI(TAG, "Common enable pin configured on GPIO %d", _config.enablePin);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_COMMON_ENABLE_PIN, 1);
+        ESP_LOGI(TAG, "Common enable pin configured on GPIO %d", CONFIG_ROBOT_COMMON_ENABLE_PIN);
     }
 
     gpio_config_t theta_pins_config = {
-        .pin_bit_mask = (1ULL << _config.theta.stepPin) | (1ULL << _config.theta.dirPin),
+        .pin_bit_mask = (1ULL << CONFIG_ROBOT_THETA_STEP_PIN) | (1ULL << CONFIG_ROBOT_THETA_DIR_PIN),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE
     };
     ESP_RETURN_ON_ERROR(gpio_config(&theta_pins_config), TAG, "Failed to configure theta step/dir pins");
-    gpio_set_level(_config.theta.stepPin, 0);
-    gpio_set_level(_config.theta.dirPin, 0);
+    gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN, 0);
+    gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, 0);
 
     gpio_config_t rho_pins_config = {
-        .pin_bit_mask = (1ULL << _config.rho.stepPin) | (1ULL << _config.rho.dirPin),
+        .pin_bit_mask = (1ULL << CONFIG_ROBOT_RHO_STEP_PIN) | (1ULL << CONFIG_ROBOT_RHO_DIR_PIN),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE
     };
     ESP_RETURN_ON_ERROR(gpio_config(&rho_pins_config), TAG, "Failed to configure rho step/dir pins");
-    gpio_set_level(_config.rho.stepPin, 0);
-    gpio_set_level(_config.rho.dirPin, 0);
+    gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 0);
+    gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, 0);
 
     return ESP_OK;
 }
@@ -247,13 +185,13 @@ void PolarRobot::setMotorsActive(bool active) {
 
     _motorsActive = active;
 
-    if (_config.enablePin != GPIO_NUM_NC) {
+    if (CONFIG_ROBOT_COMMON_ENABLE_PIN != GPIO_NUM_NC) {
         if (active) {
-            gpio_set_level(_config.enablePin, 0);
+            gpio_set_level((gpio_num_t)CONFIG_ROBOT_COMMON_ENABLE_PIN, 0);
             esp_timer_stop(_motorInactivityTimer);
         }
         else {
-            gpio_set_level(_config.enablePin, 1);
+            gpio_set_level((gpio_num_t)CONFIG_ROBOT_COMMON_ENABLE_PIN, 1);
         }
     }
 }
@@ -317,8 +255,8 @@ float PolarRobot::calculateMinRotation(float target, float current) {
     return diff;
 }
 
-bool PolarRobot::isInBounds(const PolarPoint& polar, float minRadius, float maxRadius) {
-    return (polar.rho >= minRadius && polar.rho <= maxRadius);
+bool PolarRobot::isInBounds(const PolarPoint& polar, float maxRadius) {
+    return (polar.rho <= maxRadius);
 }
 
 CartesianPoint PolarRobot::getEffectiveStartPosition() const {
@@ -343,9 +281,8 @@ esp_err_t PolarRobot::moveTo(const CartesianPoint& target, float feedRate) {
 
     // Convert to polar and check bounds
     PolarPoint targetPolar = cartesianToPolar(target);
-    if (!isInBounds(targetPolar, _config.rho.minRadius, _config.rho.maxRadius)) {
-        ESP_LOGW(TAG, "Target out of bounds: rho=%.2f (min=%.2f, max=%.2f)",
-            targetPolar.rho, _config.rho.minRadius, _config.rho.maxRadius);
+    if (!isInBounds(targetPolar, CONFIG_ROBOT_RHO_MAX_RADIUS)) {
+        ESP_LOGW(TAG, "Target out of bounds");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -366,7 +303,7 @@ esp_err_t PolarRobot::moveTo(const CartesianPoint& target, float feedRate) {
     // Create motion command for short moves
     MotionCommand cmd = {
         .target = target,
-        .feedRate = feedRate > 0 ? feedRate : _config.rho.maxSpeed,
+        .feedRate = feedRate > 0 ? feedRate : CONFIG_ROBOT_RHO_MAX_SPEED,
         .isRelative = false,
         .commandId = esp_random()
     };
@@ -406,9 +343,8 @@ esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
     }
 
     // Check bounds
-    if (!isInBounds(target, _config.rho.minRadius, _config.rho.maxRadius)) {
-        ESP_LOGW(TAG, "Target out of bounds: rho=%.2f (min=%.2f, max=%.2f)",
-            target.rho, _config.rho.minRadius, _config.rho.maxRadius);
+    if (!isInBounds(target, CONFIG_ROBOT_RHO_MAX_RADIUS)) {
+        ESP_LOGW(TAG, "Target out of bounds");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -577,8 +513,8 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
 
     setMotorsActive(true);
 
-    gpio_set_level(_config.theta.dirPin, _currentMotion.thetaStepDir > 0 ? 1 : 0);
-    gpio_set_level(_config.rho.dirPin, _currentMotion.rhoStepDir > 0 ? 1 : 0);
+    gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, _currentMotion.thetaStepDir > 0 ? 1 : 0);
+    gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, _currentMotion.rhoStepDir > 0 ? 1 : 0);
 
     ESP_LOGV(TAG, "Direction pins set: theta=%d (dir=%ld), rho=%d (dir=%ld)",
         _currentMotion.thetaStepDir > 0 ? 1 : 0, _currentMotion.thetaStepDir,
@@ -596,7 +532,7 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
         float totalDistance = _currentMotion.totalDistance; // in mm
         float feedRateMMPerSec = _currentMotion.feedRate / 60.0f; // Convert mm/min to mm/sec
         if (feedRateMMPerSec <= 0) {
-            feedRateMMPerSec = _config.rho.maxSpeed / 60.0f; // Use max speed if no feedrate specified
+            feedRateMMPerSec = CONFIG_ROBOT_RHO_MAX_SPEED / 60.0f; // Use max speed if no feedrate specified
         }
 
         uint32_t totalSteps = _bresenham.stepsA + _bresenham.stepsB;
@@ -669,9 +605,9 @@ void IRAM_ATTR PolarRobot::generateSteps() {
     // Generate theta steps using hardware GPIO
     if (stepA && _bresenham.stepsA > 0) {
         // Direction pin already set in planMotion() - just generate step pulse
-        gpio_set_level(_config.theta.stepPin, 1);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN, 1);
         esp_rom_delay_us(2); // Minimum pulse width for stepper drivers (2µs)
-        gpio_set_level(_config.theta.stepPin, 0);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN, 0);
 
         _bresenham.stepsA--;
         _currentMotion.thetaStepsRemaining--;
@@ -681,9 +617,9 @@ void IRAM_ATTR PolarRobot::generateSteps() {
     // Generate rho steps using hardware GPIO
     if (stepB && _bresenham.stepsB > 0) {
         // Direction pin already set in planMotion() - just generate step pulse
-        gpio_set_level(_config.rho.stepPin, 1);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 1);
         esp_rom_delay_us(2); // Minimum pulse width for stepper drivers (2µs)
-        gpio_set_level(_config.rho.stepPin, 0);
+        gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 0);
 
         _bresenham.stepsB--;
         _currentMotion.rhoStepsRemaining--;
@@ -697,8 +633,8 @@ void IRAM_ATTR PolarRobot::generateSteps() {
 }
 
 void PolarRobot::handleStepOverflow() {
-    int32_t thetaRotSteps = _config.theta.stepsPerRot * microstepMultiplier * _config.theta.gearRatio;
-    int32_t rhoRotSteps = _config.rho.stepsPerRot * microstepMultiplier;
+    int32_t thetaRotSteps = CONFIG_ROBOT_THETA_STEPS_PER_ROT * microstepMultiplier * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f);
+    int32_t rhoRotSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * microstepMultiplier;
 
     while (_thetaPosition > thetaRotSteps) {
         _thetaPosition -= thetaRotSteps;
@@ -757,13 +693,11 @@ RobotStatus PolarRobot::getStatus() {
     status.theta.isEnabled = _motorsActive; // Use actual motor activity state
     status.theta.isHomed = _isHomed;
     status.theta.isStalled = false;
-    status.theta.current = _config.theta.current;
 
     status.rho.position = _rhoPosition;
     status.rho.isEnabled = _motorsActive; // Use actual motor activity state
     status.rho.isHomed = _isHomed;
     status.rho.isStalled = _rhoStepper ? _rhoStepper->is_stalled() : false;
-    status.rho.current = _config.rho.current;
 
     // Overall status
     status.isHomed = _isHomed;
@@ -808,14 +742,14 @@ void PolarRobot::deinit() {
 
 void PolarRobot::stepsToPolar(int32_t thetaSteps, int32_t rhoSteps, PolarPoint& polar) const {
     float fullThetaSteps = (float)thetaSteps / microstepMultiplier;
-    float motorRotations = fullThetaSteps / _config.theta.stepsPerRot;
-    float driveGearRotations = motorRotations / _config.theta.gearRatio; // motor -> gear
+    float motorRotations = fullThetaSteps / CONFIG_ROBOT_THETA_STEPS_PER_ROT;
+    float driveGearRotations = motorRotations / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // motor -> gear
     polar.theta = driveGearRotations * 360.0f; // gear rotations -> degrees
     polar.theta = normalizeAngle(polar.theta); // Normalize to 0-360 degrees
 
     float fullRhoSteps = (float)rhoSteps / microstepMultiplier;
-    float rhoCounteractSteps = fullThetaSteps / _config.theta.gearRatio;
-    polar.rho = (fullRhoSteps - rhoCounteractSteps) / _config.rho.stepsPerMm;
+    float rhoCounteractSteps = fullThetaSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
+    polar.rho = (fullRhoSteps - rhoCounteractSteps) / CONFIG_ROBOT_RHO_STEPS_PER_MM;
 }
 
 void PolarRobot::polarToSteps(PolarPoint& polar, int32_t& thetaSteps, int32_t& rhoSteps) const {
@@ -823,11 +757,11 @@ void PolarRobot::polarToSteps(PolarPoint& polar, int32_t& thetaSteps, int32_t& r
     float rho = polar.rho;
 
     float driveGearRotations = theta / 360.0f;
-    float motorRotations = driveGearRotations * _config.theta.gearRatio;
-    float thetaFullSteps = motorRotations * _config.theta.stepsPerRot;
+    float motorRotations = driveGearRotations * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // gear -> motor
+    float thetaFullSteps = motorRotations * CONFIG_ROBOT_THETA_STEPS_PER_ROT; // motor rotations -> steps
     thetaSteps = thetaFullSteps * microstepMultiplier;
 
-    float rhoFullSteps = rho * _config.rho.stepsPerMm;
+    float rhoFullSteps = rho * CONFIG_ROBOT_RHO_STEPS_PER_MM; // rho in mm -> steps
     rhoSteps = rhoFullSteps * microstepMultiplier;
 }
 
@@ -840,7 +774,7 @@ void PolarRobot::calculateCoupledMotorSteps(const PolarPoint& startPolar, const 
     int32_t rhoBase;
     polarToSteps(deltaPolar, thetaMotorSteps, rhoBase);
 
-    float rhoCounteractSteps = thetaMotorSteps / _config.theta.gearRatio;
+    float rhoCounteractSteps = thetaMotorSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
     rhoMotorSteps = rhoBase + rhoCounteractSteps;
 }
 
@@ -891,16 +825,15 @@ esp_err_t PolarRobot::segmentLongMove(const CartesianPoint& start, const Cartesi
 
         // Check bounds for this waypoint
         PolarPoint waypointPolar = cartesianToPolar(waypoint);
-        if (!isInBounds(waypointPolar, _config.rho.minRadius, _config.rho.maxRadius)) {
-            ESP_LOGW(TAG, "Waypoint %d out of bounds: rho=%.2f (min=%.2f, max=%.2f)",
-                i, waypointPolar.rho, _config.rho.minRadius, _config.rho.maxRadius);
+        if (!isInBounds(waypointPolar, CONFIG_ROBOT_RHO_MAX_RADIUS)) {
+            ESP_LOGW(TAG, "Waypoint %d out of bounds", i);
             return ESP_ERR_INVALID_ARG;
         }
 
         // Create motion command for this segment
         MotionCommand cmd = {
             .target = waypoint,
-            .feedRate = feedRate > 0 ? feedRate : _config.rho.maxSpeed,
+            .feedRate = feedRate > 0 ? feedRate : CONFIG_ROBOT_RHO_MAX_SPEED,
             .isRelative = false,
             .commandId = esp_random()
         };
@@ -930,9 +863,9 @@ uint64_t PolarRobot::calculateStepInterval() {
 
     if (_bresenham.stepsA > 0) {
         const float microstepMultiplier = 16.0f;
-        float driveGearRPM = _config.theta.maxSpeed;
-        float motorRPM = driveGearRPM * _config.theta.gearRatio;
-        float fullMotorStepsPerSecond = (motorRPM * _config.theta.stepsPerRot) / 60.0f;
+        float driveGearRPM = CONFIG_ROBOT_RHO_MAX_SPEED / 60.0f; // Convert max speed to RPM
+        float motorRPM = driveGearRPM * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Convert gear RPM to motor RPM
+        float fullMotorStepsPerSecond = (motorRPM * CONFIG_ROBOT_THETA_STEPS_PER_ROT) / 60.0f;
         float microstepsPerSecond = fullMotorStepsPerSecond * microstepMultiplier;
         thetaTimeSeconds = _bresenham.stepsA / microstepsPerSecond;
     }
@@ -941,9 +874,9 @@ uint64_t PolarRobot::calculateStepInterval() {
         const float microstepMultiplier = 16.0f;
         float feedRateMMPerSec = _currentMotion.feedRate / 60.0f;
         if (feedRateMMPerSec <= 0) {
-            feedRateMMPerSec = _config.rho.maxSpeed / 60.0f;
+            feedRateMMPerSec = CONFIG_ROBOT_RHO_MAX_SPEED / 60.0f;
         }
-        float fullStepsPerSecond = feedRateMMPerSec * _config.rho.stepsPerMm;
+        float fullStepsPerSecond = feedRateMMPerSec * CONFIG_ROBOT_RHO_STEPS_PER_MM;
         float microstepsPerSecond = fullStepsPerSecond * microstepMultiplier;
         rhoTimeSeconds = _bresenham.stepsB / microstepsPerSecond;
     }

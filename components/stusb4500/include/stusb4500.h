@@ -243,10 +243,6 @@ extern "C" {
         // Utility functions
         static const char* ccStateToString(stusb4500_cc_state_t state);
         static const char* typecFsmStateToString(stusb4500_typec_fsm_state_t state);
-        void printNegotiationStatus(const stusb4500_negotiation_status_t* status);
-        void printPowerStatus(const stusb4500_power_status_t* status);
-        void printPdo(const stusb4500_pdo_t* pdo, uint8_t pdo_number);
-        static esp_err_t scanI2cBus(i2c_master_bus_handle_t bus_handle);
 
         // Default NVM values (exactly matching SparkFun)
         static const uint8_t default_nvm_sectors[5][8];

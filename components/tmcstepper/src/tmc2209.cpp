@@ -188,13 +188,6 @@ esp_err_t TMC2209Stepper::set_stallguard_callback(gpio_num_t diag_pin, StallGuar
     return ESP_OK;
 }
 
-esp_err_t TMC2209Stepper::set_stallguard_enable(bool en) {
-    uint32_t g; esp_err_t r = _bus.read_register(_addr, REG_GCONF, &g);
-    if (r != ESP_OK) g = 0;
-    if (en) g |= (1 << 2); else g &= ~(1 << 2);
-    return _bus.write_register(_addr, REG_GCONF, g);
-}
-
 esp_err_t TMC2209Stepper::set_stallguard_min_speed(uint32_t min_spd) {
     _shadow_tcoolthrs = min_spd;
     return _bus.write_register(_addr, REG_TCOOLTHRS, _shadow_tcoolthrs);
@@ -283,6 +276,7 @@ void IRAM_ATTR TMC2209Stepper::stallguard_isr_handler(void* a) {
 }
 
 void TMC2209Stepper::handle_stallguard_interrupt() {
+    ESP_EARLY_LOGI(TAG, "Stallguard interrupt on addr %u", _addr);
     if (_callback) {
         bool s = gpio_get_level(_diag_pin) == 1;
         _callback(_addr, s);

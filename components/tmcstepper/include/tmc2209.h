@@ -36,7 +36,6 @@ public:
     esp_err_t set_chopper_hysteresis_start(uint8_t hstrt);
     esp_err_t set_chopper_hysteresis_end(int8_t hend);
     esp_err_t set_chopper_blank_time(uint8_t tbl);
-    esp_err_t set_stallguard_enable(bool en);
     esp_err_t set_stallguard_callback(gpio_num_t diag_pin, StallGuardCallback cb);
     esp_err_t set_stallguard_threshold(uint8_t th);
     esp_err_t set_stallguard_min_speed(uint32_t min_spd);

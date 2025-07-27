@@ -2,7 +2,7 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "driver/gpio.h"
+#include "soc/gpio_num.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
@@ -41,11 +41,6 @@ esp_err_t STUSB4500::begin(uint8_t device_address)
         return ESP_OK;
     }
 
-#if !CONFIG_STUSB4500_ENABLE
-    ESP_LOGE(TAG, "STUSB4500 is disabled in configuration");
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
-
     this->device_address = device_address;
     esp_err_t ret = ESP_OK;
 
@@ -59,16 +54,6 @@ esp_err_t STUSB4500::begin(uint8_t device_address)
         .intr_priority = 0,
     };
 
-    // Configure GPIO pins with pull-ups (important for I2C)
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << CONFIG_STUSB4500_SDA_PIN) | (1ULL << CONFIG_STUSB4500_SCL_PIN),
-        .mode = GPIO_MODE_INPUT_OUTPUT_OD,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io_conf);
-
     ret = i2c_new_master_bus(&i2c_bus_config, &i2c_bus_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create I2C master bus: %s", esp_err_to_name(ret));
@@ -79,7 +64,7 @@ esp_err_t STUSB4500::begin(uint8_t device_address)
     i2c_device_config_t device_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = this->device_address,
-        .scl_speed_hz = CONFIG_STUSB4500_I2C_FREQ_HZ,
+        .scl_speed_hz = 100000, // 100kHz
     };
 
     ret = i2c_master_bus_add_device(i2c_bus_handle, &device_cfg, &device_handle);
@@ -90,39 +75,18 @@ esp_err_t STUSB4500::begin(uint8_t device_address)
         return ret;
     }
 
-    ESP_LOGI(TAG, "I2C bus configured: port=%d, SDA=%d, SCL=%d, freq=%dHz, addr=0x%02X",
-        CONFIG_STUSB4500_I2C_PORT, CONFIG_STUSB4500_SDA_PIN, CONFIG_STUSB4500_SCL_PIN,
-        CONFIG_STUSB4500_I2C_FREQ_HZ, this->device_address);
-
-    // Verify device ID with multiple attempts and different approaches
     uint8_t device_id = 0;
     ret = ESP_ERR_INVALID_RESPONSE;
 
-    // Try reading device ID multiple times with different methods
     for (int attempt = 0; attempt < 3; attempt++) {
-        ESP_LOGI(TAG, "Attempting to read device ID (attempt %d/3)", attempt + 1);
-
-        // Try standard register read
         ret = readDeviceId(&device_id);
         if (ret == ESP_OK && device_id != 0) {
-            ESP_LOGI(TAG, "Device ID read successful: 0x%02X", device_id);
             break;
         }
-
-        // Try with a delay
-        vTaskDelay(pdMS_TO_TICKS(10));
-
-        // Try reading a simple register first (like alert status)
-        uint8_t alert_status;
-        esp_err_t alert_ret = i2cReadRegister(STUSB4500_REG_ALERT_STATUS_1, &alert_status);
-        ESP_LOGD(TAG, "Alert status read: ret=%s, value=0x%02X", esp_err_to_name(alert_ret), alert_status);
-
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     if (ret != ESP_OK || device_id == 0) {
-        ESP_LOGE(TAG, "Failed to read device ID after 3 attempts: %s (read value: 0x%02X)",
-            esp_err_to_name(ret), device_id);
         end();
         return ret != ESP_OK ? ret : ESP_ERR_NOT_FOUND;
     }
@@ -134,17 +98,11 @@ esp_err_t STUSB4500::begin(uint8_t device_address)
         return ESP_ERR_NOT_FOUND;
     }
 
-    // Clear any pending alert status
     ret = clearAlertStatus();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to clear alert status: %s", esp_err_to_name(ret));
-        // Continue anyway, this is not critical
-    }
-
     is_initialized = true;
-    ESP_LOGI(TAG, "STUSB4500 initialized successfully (Device ID: 0x%02X)", device_id);
 
-    // Read NVM on first initialization
+    ESP_LOGI(TAG, "initialized successfully (Device ID: 0x%02X)", device_id);
+
     if (!nvm_sectors_read) {
         ret = readNVM();
         if (ret != ESP_OK) {
@@ -173,7 +131,6 @@ esp_err_t STUSB4500::end()
 
     is_initialized = false;
     nvm_sectors_read = false;
-    ESP_LOGI(TAG, "STUSB4500 deinitialized");
     return ESP_OK;
 }
 
@@ -213,10 +170,8 @@ esp_err_t STUSB4500::readNVM()
 
     nvm_sectors_read = true;
 
-    // Load PDO settings from NVM to volatile registers (SparkFun approach)
     loadPdoSettingsFromNVM();
 
-    ESP_LOGI(TAG, "Successfully read NVM configuration");
     return ESP_OK;
 }
 
@@ -267,7 +222,6 @@ esp_err_t STUSB4500::writeNVM(bool use_defaults)
         return ret;
     }
 
-    ESP_LOGI(TAG, "Successfully wrote NVM configuration");
     return ESP_OK;
 }
 
@@ -515,26 +469,6 @@ esp_err_t STUSB4500::readPowerStatus(stusb4500_power_status_t* status)
         status->power_mw = 0;
     }
 
-    // Check USB connection status
-    stusb4500_cc_status_t cc_status;
-    ret = readCcStatus(&cc_status);
-
-    // Check PD contract status - use both register flag and voltage detection
-    stusb4500_prt_status_t prt_status;
-    bool prt_flag = false;
-    ret = readPrtStatus(&prt_status);
-    if (ret == ESP_OK) {
-        prt_flag = prt_status.pd_contract_active;
-    }
-
-    // Also consider high voltage as indication of PD contract
-    bool high_voltage = status->voltage_mv > 5500; // More than USB 5V + tolerance
-
-    if (high_voltage && !prt_flag) {
-        ESP_LOGW(TAG, "PD contract flag not set but high voltage detected (%d mV) - assuming PD active",
-            status->voltage_mv);
-    }
-
     // Read VSAFE0V status
     uint8_t vsafe0v_reg;
     ret = i2cReadRegister(STUSB4500_REG_VBUS_VSAFE0V, &vsafe0v_reg);
@@ -565,9 +499,6 @@ esp_err_t STUSB4500::readVoltage(uint16_t* voltage_mv)
     // Convert to millivolts using the STUSB4500 scaling factor
     // VBUS voltage scale is 25mV per LSB (from STUSB4500 datasheet)
     *voltage_mv = voltage_raw * STUSB4500_VBUS_LSB_MV;
-
-    ESP_LOGD(TAG, "Raw voltage: 0x%04X (%d), Converted: %d mV", voltage_raw, voltage_raw, *voltage_mv);
-
     return ESP_OK;
 }
 
@@ -603,33 +534,6 @@ esp_err_t STUSB4500::readCurrent(uint16_t* current_ma)
     uint8_t active_pdo_reg;
     ret = i2cReadRegister(STUSB4500_REG_PE_PDO, &active_pdo_reg);
     if (ret != ESP_OK) {
-        ESP_LOGD(TAG, "Failed to read active PDO register, trying alternative method");
-
-        // Alternative: Based on voltage, guess which PDO is active
-        if (high_voltage_detected) {
-            if (voltage_mv >= 19000) {
-                // Likely 20V PDO (PDO3)
-                uint32_t pdo_data = readPdoFromRegisters(3);
-                if (pdo_data != 0) {
-                    uint32_t current_raw = pdo_data & 0x3FF;
-                    *current_ma = current_raw * 10;
-                    ESP_LOGI(TAG, "Assuming 20V PDO3 based on voltage, current: %d mA", *current_ma);
-                    return ESP_OK;
-                }
-            }
-            else if (voltage_mv >= 14000) {
-                // Likely 15V PDO (PDO2)
-                uint32_t pdo_data = readPdoFromRegisters(2);
-                if (pdo_data != 0) {
-                    uint32_t current_raw = pdo_data & 0x3FF;
-                    *current_ma = current_raw * 10;
-                    ESP_LOGI(TAG, "Assuming 15V PDO2 based on voltage, current: %d mA", *current_ma);
-                    return ESP_OK;
-                }
-            }
-        }
-
-        // Alternative: read the PDO count and assume highest PDO is active
         uint8_t pdo_count;
         ret = getPdoNumber(&pdo_count);
         if (ret == ESP_OK && pdo_count > 0) {
@@ -637,12 +541,10 @@ esp_err_t STUSB4500::readCurrent(uint16_t* current_ma)
             if (pdo_data != 0) {
                 uint32_t current_raw = pdo_data & 0x3FF;
                 *current_ma = current_raw * 10;
-                ESP_LOGD(TAG, "Using PDO %d current: %d mA", pdo_count, *current_ma);
                 return ESP_OK;
             }
         }
 
-        // Fallback to reasonable estimate
         ESP_LOGW(TAG, "Could not determine negotiated current, using 3A estimate");
         *current_ma = 3000;
         return ESP_OK;
@@ -667,13 +569,10 @@ esp_err_t STUSB4500::readCurrent(uint16_t* current_ma)
     // Extract current from PDO (bits 0-9, in 10mA units)
     uint32_t current_raw = pdo_data & 0x3FF;
     *current_ma = current_raw * 10; // Convert from 10mA units to mA
-
-    ESP_LOGD(TAG, "Active PDO: %d, Raw current: %lu, Current: %d mA",
-        active_pdo_num, current_raw, *current_ma);
-
     return ESP_OK;
-}esp_err_t STUSB4500::readPower(uint32_t* power_mw)
-{
+}
+
+esp_err_t STUSB4500::readPower(uint32_t* power_mw) {
     if (!is_initialized || power_mw == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -697,9 +596,6 @@ esp_err_t STUSB4500::readCurrent(uint16_t* current_ma)
 
     // Calculate power in milliwatts
     *power_mw = (uint32_t)voltage_mv * current_ma / 1000;
-
-    ESP_LOGD(TAG, "Power calculation: %d mV × %d mA = %lu mW",
-        voltage_mv, current_ma, *power_mw);
 
     return ESP_OK;
 }
@@ -763,8 +659,6 @@ esp_err_t STUSB4500::getNegotiatedPdoNumber(uint8_t* pdo_num)
     // The active PDO number is in the lower 3 bits
     *pdo_num = active_pdo_reg & 0x07;
 
-    ESP_LOGD(TAG, "Currently negotiated PDO: %d (reg value: 0x%02X)", *pdo_num, active_pdo_reg);
-
     return ESP_OK;
 }
 
@@ -774,8 +668,6 @@ esp_err_t STUSB4500::softReset()
     if (!is_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    ESP_LOGI(TAG, "Performing soft reset");
 
     // Send soft reset command (based on SparkFun implementation)
     esp_err_t ret = i2cWriteRegister(STUSB4500_REG_TX_HEADER_LOW, 0x0D);
@@ -797,18 +689,13 @@ esp_err_t STUSB4500::i2cRead(uint8_t reg_addr, uint8_t* data, size_t len)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGD(TAG, "I2C read: reg=0x%02X, len=%d", reg_addr, len);
-
     esp_err_t ret = i2c_master_transmit_receive(device_handle,
         &reg_addr, 1,
         data, len,
-        CONFIG_STUSB4500_I2C_TIMEOUT_MS);
+        250);
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "I2C read failed: reg=0x%02X, error=%s", reg_addr, esp_err_to_name(ret));
-    }
-    else {
-        ESP_LOGD(TAG, "I2C read success: reg=0x%02X, data=0x%02X", reg_addr, data[0]);
     }
 
     return ret;
@@ -830,15 +717,10 @@ esp_err_t STUSB4500::i2cWrite(uint8_t reg_addr, const uint8_t* data, size_t len)
     write_buffer[0] = reg_addr;
     memcpy(&write_buffer[1], data, len);
 
-    ESP_LOGD(TAG, "I2C write: reg=0x%02X, len=%d, data=0x%02X", reg_addr, len, data[0]);
-
-    esp_err_t ret = i2c_master_transmit(device_handle, write_buffer, len + 1, CONFIG_STUSB4500_I2C_TIMEOUT_MS);
+    esp_err_t ret = i2c_master_transmit(device_handle, write_buffer, len + 1, 250);
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "I2C write failed: reg=0x%02X, error=%s", reg_addr, esp_err_to_name(ret));
-    }
-    else {
-        ESP_LOGD(TAG, "I2C write success: reg=0x%02X", reg_addr);
     }
 
     free(write_buffer);
@@ -1482,42 +1364,6 @@ esp_err_t STUSB4500::setReqSrcCurrent(bool enabled)
     return ESP_OK;
 }
 
-// Static utility function for I2C bus scanning
-esp_err_t STUSB4500::scanI2cBus(i2c_master_bus_handle_t bus_handle)
-{
-    ESP_LOGI(TAG, "Scanning I2C bus...");
-    bool found_devices = false;
-
-    for (uint8_t addr = 0x08; addr < 0x78; addr++) {
-        i2c_device_config_t device_cfg = {
-            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-            .device_address = addr,
-            .scl_speed_hz = 100000,
-        };
-
-        i2c_master_dev_handle_t test_handle;
-        esp_err_t ret = i2c_master_bus_add_device(bus_handle, &device_cfg, &test_handle);
-        if (ret == ESP_OK) {
-            // Try to probe the device
-            uint8_t dummy = 0;
-            ret = i2c_master_transmit_receive(test_handle, &dummy, 0, &dummy, 0, 50);
-
-            if (ret == ESP_OK || ret == ESP_ERR_TIMEOUT) {
-                ESP_LOGI(TAG, "Found I2C device at address 0x%02X", addr);
-                found_devices = true;
-            }
-
-            i2c_master_bus_rm_device(test_handle);
-        }
-    }
-
-    if (!found_devices) {
-        ESP_LOGW(TAG, "No I2C devices found on the bus");
-    }
-
-    return ESP_OK;
-}
-
 // Utility Functions
 const char* STUSB4500::ccStateToString(stusb4500_cc_state_t state)
 {
@@ -1539,38 +1385,4 @@ const char* STUSB4500::typecFsmStateToString(stusb4500_typec_fsm_state_t state)
     case STUSB4500_TYPEC_FSM_DEBUG_ACCESSORY_SNK: return "DebugAccessory.SNK";
     default: return "Unknown";
     }
-}
-
-void STUSB4500::printNegotiationStatus(const stusb4500_negotiation_status_t* status)
-{
-    if (status == nullptr) return;
-
-    ESP_LOGI(TAG, "=== STUSB4500 Status ===");
-    ESP_LOGI(TAG, "Device ID: 0x%02X", status->device_id);
-    ESP_LOGI(TAG, "Connected: %s", status->is_connected ? "Yes" : "No");
-    ESP_LOGI(TAG, "PD Contract: %s", status->pd_negotiation_complete ? "Active" : "None");
-    ESP_LOGI(TAG, "CC1: %s", ccStateToString(status->cc_status.cc1_state));
-    ESP_LOGI(TAG, "CC2: %s", ccStateToString(status->cc_status.cc2_state));
-    ESP_LOGI(TAG, "FSM: %s", typecFsmStateToString(status->pd_typec_status.fsm_state));
-}
-
-void STUSB4500::printPowerStatus(const stusb4500_power_status_t* status)
-{
-    if (status == nullptr) return;
-
-    ESP_LOGI(TAG, "=== Power Status ===");
-    ESP_LOGI(TAG, "Voltage: %u mV", status->voltage_mv);
-    ESP_LOGI(TAG, "Current: %u mA", status->current_ma);
-    ESP_LOGI(TAG, "Power: %lu mW", status->power_mw);
-}
-
-void STUSB4500::printPdo(const stusb4500_pdo_t* pdo, uint8_t pdo_number)
-{
-    if (pdo == nullptr) return;
-
-    ESP_LOGI(TAG, "PDO %d: %.2fV/%.2fA (%.1fW)",
-        pdo_number,
-        pdo->voltage_mv / 1000.0f,
-        pdo->max_current_ma / 1000.0f,
-        (pdo->voltage_mv * pdo->max_current_ma) / 1000000.0f);
 }

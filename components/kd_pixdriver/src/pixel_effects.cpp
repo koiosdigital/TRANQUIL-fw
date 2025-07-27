@@ -4,8 +4,6 @@
 #include <algorithm>
 #include <cmath>
 
-static const char* TAG = "kd_effects";
-
 PixelEffectEngine::PixelEffectEngine(uint32_t update_rate_hz)
     : update_rate_hz_(update_rate_hz) {
     // Reserve space for a reasonable number of channels

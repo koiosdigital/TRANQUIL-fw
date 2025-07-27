@@ -312,48 +312,6 @@ static void register_wifi_reset(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
-static struct {
-    struct arg_str* ssid;
-    struct arg_str* password;
-    struct arg_end* end;
-} wifi_provision_args;
-
-static int wifi_provision(int argc, char** argv)
-{
-    int nerrors = arg_parse(argc, argv, (void**)&wifi_provision_args);
-    if (nerrors != 0) {
-        arg_print_errors(stderr, wifi_provision_args.end, argv[0]);
-        return 1;
-    }
-
-    const char* ssid = wifi_provision_args.ssid->sval[0];
-    const char* password = wifi_provision_args.password->sval[0];
-
-    console_out("Provisioning WiFi with SSID: %s\n", ssid);
-
-    // TODO: Implement actual WiFi provisioning
-    // This would typically call kd_common_set_wifi_credentials or similar
-
-    console_out("{\"error\":false,\"message\":\"WiFi provisioned successfully\"}\n");
-    return 0;
-}
-
-static void register_wifi_provision(void)
-{
-    wifi_provision_args.ssid = arg_str1(NULL, NULL, "<ssid>", "WiFi SSID");
-    wifi_provision_args.password = arg_str1(NULL, NULL, "<password>", "WiFi password");
-    wifi_provision_args.end = arg_end(2);
-
-    const esp_console_cmd_t cmd = {
-        .command = "wifi_provision",
-        .help = "Provision WiFi with SSID and password",
-        .hint = NULL,
-        .func = &wifi_provision,
-        .argtable = &wifi_provision_args
-    };
-    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
-}
-
 static int assert_crash(int argc, char** argv)
 {
     console_out("Triggering system crash...\n");
@@ -403,10 +361,6 @@ static void register_get_version(void)
 static int check_ota_updates(int argc, char** argv)
 {
     console_out("Checking for OTA updates...\n");
-
-    // TODO: Implement actual OTA update check
-    // This would typically check a remote server for updates
-
     console_out("{\"error\":false,\"message\":\"No updates available\",\"update_available\":false}\n");
     return 0;
 }
@@ -449,6 +403,10 @@ void console_init() {
     esp_console_register_help_command();
     register_free();
     register_heap();
+    register_wifi_reset();
+    register_assert();
+    register_get_version();
+    register_check_ota_updates();
 
 #ifndef KD_COMMON_CRYPTO_DISABLE
     register_crypto_status();
@@ -458,12 +416,6 @@ void console_init() {
     register_set_ds_params();
     register_set_claim_token();
 #endif
-
-    register_wifi_reset();
-    register_wifi_provision();
-    register_assert();
-    register_get_version();
-    register_check_ota_updates();
 
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
     esp_console_dev_usb_serial_jtag_config_t hw_config = ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();

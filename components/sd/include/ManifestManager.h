@@ -55,7 +55,6 @@ private:
     Pattern jsonToPattern(const cJSON* json);
     Playlist jsonToPlaylist(const cJSON* json);
     std::string generateUUID();
-    std::string getCurrentDateString();
 
 public:
     ManifestManager();
