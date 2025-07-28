@@ -647,7 +647,7 @@ CONFIG_ROBOT_RHO_MAX_RADIUS=155
 #
 # StallGuard Configuration
 #
-CONFIG_ROBOT_RHO_STALLGUARD_THRESHOLD=5
+CONFIG_ROBOT_RHO_STALLGUARD_THRESHOLD=30
 # end of StallGuard Configuration
 # end of Rho Axis Configuration
 # end of Polar Robot Motion System

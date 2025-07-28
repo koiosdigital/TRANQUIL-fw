@@ -63,7 +63,14 @@ public:
     // Homing state machine enums (public for status reporting)
     enum class HomingState {
         IDLE,
+        // Rho calibration phases
+        RHO_SEEKING_MAX,
+        RHO_SEEKING_MIN,
+        // Theta calibration phases
         THETA_BACKING_OFF,
+        THETA_SEEKING_FIRST_EDGE,
+        THETA_SEEKING_SECOND_EDGE,
+        // Legacy states for backwards compatibility
         THETA_SEEKING,
         RHO_SEEKING,
         COMPLETE,
@@ -106,6 +113,10 @@ public:
     bool isHoming() const { return _homingControl.homingActive; }
     HomingState getHomingState() const { return _homingControl.state; }
     HomingAxis getHomingAxis() const { return _homingControl.currentAxis; }
+
+    // Calibration results (available after homing completes)
+    int32_t getRhoMaxSteps() const { return _homingControl.rho_max_steps; }
+    int32_t getStepsPerThetaRotation() const { return _homingControl.steps_per_theta_rot; }
 
     // Coordinate transformations
     static CartesianPoint polarToCartesian(const PolarPoint& polar);
@@ -202,7 +213,13 @@ private:
         HomingAxis currentAxis;
         int32_t stepCount;
         int32_t maxSteps;
+        int32_t thetaStepCounter; // For coupled motion: counts theta steps to determine when rho should step
         bool homingActive;
+
+        // Calibration results
+        int32_t rho_max_steps;     // Steps from max to min rho position
+        int32_t steps_per_theta_rot; // Steps for one complete theta rotation
+        bool first_theta_edge_found; // Track if we found the first rising edge
 
         HomingControl() { clear(); }
         void clear() {
@@ -210,7 +227,11 @@ private:
             currentAxis = HomingAxis::NONE;
             stepCount = 0;
             maxSteps = 0;
+            thetaStepCounter = 0;
             homingActive = false;
+            rho_max_steps = 0;
+            steps_per_theta_rot = 0;
+            first_theta_edge_found = false;
         }
     } _homingControl;
 
@@ -236,10 +257,11 @@ private:
     void IRAM_ATTR generateSteps();
     void IRAM_ATTR generateHomingSteps();
 
-    // Homing state machine
-    void processHomingStateMachine();
-    esp_err_t startThetaHoming();
-    esp_err_t startRhoHoming();
+    void IRAM_ATTR startRhoHomingISR();  // ISR-safe version for timer callbacks
+    void IRAM_ATTR startRhoMaxHomingISR(); // ISR-safe version for rho max calibration
+    void IRAM_ATTR startRhoMinHomingISR(); // ISR-safe version for rho min calibration
+    void IRAM_ATTR startThetaHomingISR(); // ISR-safe version for timer callbacks
+    void IRAM_ATTR startThetaCalibrationISR(); // ISR-safe version for theta calibration
 
     static void IRAM_ATTR rhoStallCallback(uint8_t addr, bool stalled);
     static void IRAM_ATTR endstopPinISR(void* arg);

@@ -439,12 +439,16 @@ bool PolarRobot::MotionQueue::peekLast(MotionCommand& cmd) const {
 }
 
 void PolarRobot::service() {
-    if (_homingControl.homingActive) {
-        processHomingStateMachine();
-        return;
+    // Check if homing just completed and start inactivity timer
+    if (_homingControl.state == HomingState::COMPLETE && !_homingControl.homingActive) {
+        // Reset homing state to idle and start inactivity timer
+        _homingControl.state = HomingState::IDLE;
+        const uint64_t INACTIVITY_TIMEOUT_US = 2000000; // 2 seconds
+        esp_timer_start_once(_motorInactivityTimer, INACTIVITY_TIMEOUT_US);
     }
 
-    if (!_currentMotion.active) {
+    // Handle motion command loading when not homing
+    if (!_currentMotion.active && !_homingControl.homingActive) {
         loadNextCommand();
     }
 }
