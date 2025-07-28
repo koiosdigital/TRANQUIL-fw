@@ -19,18 +19,13 @@
 // Polar coordinates
 struct PolarPoint {
     float theta;  // Angle in degrees
-    float rho;    // Radius in mm
-};
-
-// Cartesian coordinates  
-struct CartesianPoint {
-    float x, y;   // Position in mm
+    float rho;    // Normalized radius (0.0 = center, 1.0 = maximum)
 };
 
 // Motion command
 struct MotionCommand {
-    CartesianPoint target;
-    float feedRate;     // mm/min
+    PolarPoint target;
+    float feedRate;     // RPM
     bool isRelative;
     uint32_t commandId;
 };
@@ -45,8 +40,7 @@ struct MotorStatus {
 
 // Robot status
 struct RobotStatus {
-    CartesianPoint position;
-    PolarPoint polarPosition;
+    PolarPoint position;
     MotorStatus theta;
     MotorStatus rho;
     bool isHomed;
@@ -94,8 +88,6 @@ public:
     void deinit();
 
     // Motion control
-    esp_err_t moveTo(const CartesianPoint& target, float feedRate = 0);
-    esp_err_t moveBy(const CartesianPoint& delta, float feedRate = 0);
     esp_err_t moveToPolar(const PolarPoint& target, float feedRate = 0);
 
     // Homing
@@ -118,10 +110,8 @@ public:
     int32_t getRhoMaxSteps() const { return _homingControl.rho_max_steps; }
     int32_t getStepsPerThetaRotation() const { return _homingControl.steps_per_theta_rot; }
 
-    // Coordinate transformations
-    static CartesianPoint polarToCartesian(const PolarPoint& polar);
-    static PolarPoint cartesianToPolar(const CartesianPoint& cartesian);
-    static bool isInBounds(const PolarPoint& polar, float maxRadius);
+    // Polar coordinate utilities
+    static bool isInBounds(const PolarPoint& polar);
 
     // Service - call regularly from main task
     void service();
@@ -196,14 +186,14 @@ private:
 
     // Bresenham-style step scheduler for coordinated motion
     struct BresenhamScheduler {
-        int32_t stepsA, stepsB;  // Remaining steps for theta (A) and rho (B)
+        int32_t thetaSteps, rhoSteps;  // Remaining steps for theta (A) and rho (B)
         int32_t err;             // Error accumulator
-        int32_t dirA, dirB;      // Step directions for theta and rho
+        int32_t thetaDir, rhoDir;      // Step directions for theta and rho
 
         BresenhamScheduler() { clear(); }
         void clear() {
-            stepsA = stepsB = err = 0;
-            dirA = dirB = 0;
+            thetaSteps = rhoSteps = err = 0;
+            thetaDir = rhoDir = 0;
         }
     } _bresenham;
 
@@ -257,7 +247,6 @@ private:
     void IRAM_ATTR generateSteps();
     void IRAM_ATTR generateHomingSteps();
 
-    void IRAM_ATTR startRhoHomingISR();  // ISR-safe version for timer callbacks
     void IRAM_ATTR startRhoMaxHomingISR(); // ISR-safe version for rho max calibration
     void IRAM_ATTR startRhoMinHomingISR(); // ISR-safe version for rho min calibration
     void IRAM_ATTR startThetaHomingISR(); // ISR-safe version for timer callbacks
@@ -268,9 +257,6 @@ private:
 
     // Endstop reading
     bool readThetaEndstop();
-
-    // Queue management helpers
-    CartesianPoint getEffectiveStartPosition() const;
 
     // Utilities
     static float normalizeAngle(float angle);
@@ -285,8 +271,9 @@ private:
     void calculateCoupledMotorSteps(const PolarPoint& startPolar, const PolarPoint& targetPolar,
         int32_t& thetaMotorSteps, int32_t& rhoMotorSteps) const;
 
-    // Path segmentation for long moves
-    esp_err_t segmentLongMove(const CartesianPoint& start, const CartesianPoint& target, float feedRate);
+    // Convert normalized rho (0-1) to steps using calibrated maximum
+    int32_t normalizedRhoToSteps(float normalizedRho) const;
+    float stepsToNormalizedRho(int32_t steps) const;
 
     // Kinematic validation functions
     esp_err_t validateKinematics() const;

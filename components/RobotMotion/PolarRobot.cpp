@@ -24,7 +24,6 @@
 #include "esp_rom_sys.h"
 
 static const char* TAG = "PolarRobot";
-static const float microstepMultiplier = 16.0f;
 PolarRobot* g_robotInstance = nullptr;
 
 PolarRobot::PolarRobot()
@@ -205,7 +204,7 @@ void PolarRobot::debugTimerCallback(void* arg) {
     PolarRobot* robot = static_cast<PolarRobot*>(arg);
     if (robot->_currentMotion.active) {
         ESP_LOGI(TAG, "Bresenham motion status: theta=%ld remaining, rho=%ld remaining, timer active",
-            robot->_bresenham.stepsA, robot->_bresenham.stepsB);
+            robot->_bresenham.thetaSteps, robot->_bresenham.rhoSteps);
     }
 }
 
@@ -216,28 +215,11 @@ void PolarRobot::updateMotorEnableState() {
     }
 }
 
-// Coordinate transformation functions
-CartesianPoint PolarRobot::polarToCartesian(const PolarPoint& polar) {
-    float theta_rad = polar.theta * M_PI / 180.0f;
-    return {
-        .x = polar.rho * cosf(theta_rad),
-        .y = polar.rho * sinf(theta_rad)
-    };
-}
-
-PolarPoint PolarRobot::cartesianToPolar(const CartesianPoint& cartesian) {
-    float rho = sqrtf(cartesian.x * cartesian.x + cartesian.y * cartesian.y);
-    float theta = atan2f(cartesian.y, cartesian.x) * 180.0f / M_PI;
-
-    // Normalize theta to 0-360 degrees
-    theta = normalizeAngle(theta);
-
-    return { .theta = theta, .rho = rho };
-}
+// Coordinate transformation functions (removed - now pure polar)
 
 float PolarRobot::normalizeAngle(float angle) {
     while (angle < 0) angle += 360.0f;
-    while (angle >= 360.0f) angle -= 360.0f;
+    while (angle > 360.0f) angle -= 360.0f;
     return angle;
 }
 
@@ -255,52 +237,23 @@ float PolarRobot::calculateMinRotation(float target, float current) {
     return diff;
 }
 
-bool PolarRobot::isInBounds(const PolarPoint& polar, float maxRadius) {
-    return (polar.rho <= maxRadius);
+bool PolarRobot::isInBounds(const PolarPoint& polar) {
+    // Theta should be 0-360 degrees, rho should be 0.0-1.0 (normalized)
+    return (polar.theta >= 0 && polar.theta < 360.0f && polar.rho >= 0.0f && polar.rho <= 1.0f);
 }
 
-CartesianPoint PolarRobot::getEffectiveStartPosition() const {
-    // Check if there are commands in the queue
-    MotionCommand lastCmd;
-    if (_commandQueue.peekLast(lastCmd)) {
-        // Use the target of the last queued command as our starting position
-        return lastCmd.target;
-    }
-    else {
-        // No commands in queue, use current physical position
-        PolarPoint currentPolar;
-        stepsToPolar(_thetaPosition, _rhoPosition, currentPolar);
-        return polarToCartesian(currentPolar);
-    }
-}
-
-esp_err_t PolarRobot::moveTo(const CartesianPoint& target, float feedRate) {
+esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
     if (!_isHomed || _isPaused) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    // Convert to polar and check bounds
-    PolarPoint targetPolar = cartesianToPolar(target);
-    if (!isInBounds(targetPolar, CONFIG_ROBOT_RHO_MAX_RADIUS)) {
+    // Check bounds
+    if (!isInBounds(target)) {
         ESP_LOGW(TAG, "Target out of bounds");
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Get effective starting position (either from queue tail or current position)
-    CartesianPoint startCartesian = getEffectiveStartPosition();
-
-    // Calculate straight-line distance
-    float distance = sqrtf(
-        powf(target.x - startCartesian.x, 2) +
-        powf(target.y - startCartesian.y, 2)
-    );
-
-    // If move is greater than 1mm, segment it into smaller blocks
-    if (distance > 1.0f) {
-        return segmentLongMove(startCartesian, target, feedRate);
-    }
-
-    // Create motion command for short moves
+    // Create motion command for polar move
     MotionCommand cmd = {
         .target = target,
         .feedRate = feedRate > 0 ? feedRate : CONFIG_ROBOT_RHO_MAX_SPEED,
@@ -316,41 +269,9 @@ esp_err_t PolarRobot::moveTo(const CartesianPoint& target, float feedRate) {
     // Cancel any pending inactivity timer since we have new motion
     esp_timer_stop(_motorInactivityTimer);
 
-    ESP_LOGV(TAG, "Move to (%.2f, %.2f) @ %.1f mm/min - queued (queue size: %zu)",
-        target.x, target.y, cmd.feedRate, _commandQueue.count);
+    ESP_LOGI(TAG, "Move to polar (%.2f°, %.3f) @ %.1f RPM - queued (queue size: %zu)",
+        target.theta, target.rho, cmd.feedRate, _commandQueue.count);
     return ESP_OK;
-}
-
-esp_err_t PolarRobot::moveBy(const CartesianPoint& delta, float feedRate) {
-    if (!_isHomed || _isPaused) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    // Get effective starting position (either from queue tail or current position)
-    CartesianPoint startCartesian = getEffectiveStartPosition();
-
-    CartesianPoint target = {
-        .x = startCartesian.x + delta.x,
-        .y = startCartesian.y + delta.y
-    };
-
-    return moveTo(target, feedRate);
-}
-
-esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
-    if (!_isHomed || _isPaused) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    // Check bounds
-    if (!isInBounds(target, CONFIG_ROBOT_RHO_MAX_RADIUS)) {
-        ESP_LOGW(TAG, "Target out of bounds");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // Convert to cartesian and use existing moveTo (which handles segmentation)
-    CartesianPoint cartesianTarget = polarToCartesian(target);
-    return moveTo(cartesianTarget, feedRate);
 }
 
 bool PolarRobot::MotionQueue::init(size_t queueSize) {
@@ -459,8 +380,8 @@ bool PolarRobot::loadNextCommand() {
         return false; // No commands in queue
     }
     handleStepOverflow(); // Handle step overflow after motion completion
-    ESP_LOGV(TAG, "Loading next command: target(%.2f, %.2f) @ %.1f mm/min (queue remaining: %zu)",
-        cmd.target.x, cmd.target.y, cmd.feedRate, _commandQueue.count);
+    ESP_LOGI(TAG, "Loading next command: target(%.2f°, %.3f) @ %.1f RPM (queue remaining: %zu)",
+        cmd.target.theta, cmd.target.rho, cmd.feedRate, _commandQueue.count);
     planMotion(cmd);
     return true;
 }
@@ -468,13 +389,13 @@ bool PolarRobot::loadNextCommand() {
 void PolarRobot::planMotion(const MotionCommand& cmd) {
     stepsToPolar(_thetaPosition, _rhoPosition, _currentMotion.startPolar);
 
-    // Target position in polar coordinates
-    _currentMotion.targetPolar = cartesianToPolar(cmd.target);
+    // Target position is already in polar coordinates
+    _currentMotion.targetPolar = cmd.target;
 
-    ESP_LOGV(TAG, "Motion planning: current pos(%.2f°, %.2fmm) → target pos(%.2f°, %.2fmm)",
+    ESP_LOGI(TAG, "Motion planning: current pos(%.2f°, %.3f) → target pos(%.2f°, %.3f)",
         _currentMotion.startPolar.theta, _currentMotion.startPolar.rho,
         _currentMotion.targetPolar.theta, _currentMotion.targetPolar.rho);
-    ESP_LOGV(TAG, "Current motor positions: theta=%ld steps, rho=%ld steps", _thetaPosition, _rhoPosition);
+    ESP_LOGI(TAG, "Current motor positions: theta=%ld steps, rho=%ld steps", _thetaPosition, _rhoPosition);
 
     // Calculate coupled motor steps accounting for interdependent axes
     int32_t thetaMotorSteps, rhoMotorSteps;
@@ -488,27 +409,23 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
     _currentMotion.rhoStepDir = (rhoMotorSteps >= 0) ? 1 : -1;
 
     // Initialize Bresenham scheduler for coordinated motion
-    _bresenham.stepsA = _currentMotion.thetaStepsRemaining; // Theta is axis A
-    _bresenham.stepsB = _currentMotion.rhoStepsRemaining;   // Rho is axis B
-    _bresenham.dirA = _currentMotion.thetaStepDir;
-    _bresenham.dirB = _currentMotion.rhoStepDir;
+    _bresenham.thetaSteps = _currentMotion.thetaStepsRemaining; // Theta is axis A
+    _bresenham.rhoSteps = _currentMotion.rhoStepsRemaining;   // Rho is axis B
+    _bresenham.thetaDir = _currentMotion.thetaStepDir;
+    _bresenham.rhoDir = _currentMotion.rhoStepDir;
 
     // Initialize Bresenham error term based on which axis has more steps
-    if (_bresenham.stepsA >= _bresenham.stepsB) {
-        _bresenham.err = _bresenham.stepsA / 2;  // Theta is primary axis
+    if (_bresenham.thetaSteps >= _bresenham.rhoSteps) {
+        _bresenham.err = _bresenham.thetaSteps / 2;  // Theta is primary axis
     }
     else {
-        _bresenham.err = -_bresenham.stepsB / 2; // Rho is primary axis
+        _bresenham.err = -_bresenham.rhoSteps / 2; // Rho is primary axis
     }
 
-    // Calculate motion timing and speed profiles
-    CartesianPoint startCartesian = polarToCartesian(_currentMotion.startPolar);
-    CartesianPoint targetCartesian = polarToCartesian(_currentMotion.targetPolar);
-    float totalDistance = sqrtf(
-        powf(targetCartesian.x - startCartesian.x, 2) +
-        powf(targetCartesian.y - startCartesian.y, 2)
-    );
-    _currentMotion.totalDistance = totalDistance;
+    // Calculate motion timing based on angular movement
+    float thetaDelta = fabs(calculateMinRotation(_currentMotion.targetPolar.theta, _currentMotion.startPolar.theta));
+    float rhoDelta = fabs(_currentMotion.targetPolar.rho - _currentMotion.startPolar.rho);
+    _currentMotion.totalDistance = fmaxf(thetaDelta / 360.0f, rhoDelta); // Normalized motion distance
     _currentMotion.currentDistance = 0;
 
     _currentMotion.feedRate = cmd.feedRate;
@@ -520,31 +437,31 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
     gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, _currentMotion.thetaStepDir > 0 ? 1 : 0);
     gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, _currentMotion.rhoStepDir > 0 ? 1 : 0);
 
-    ESP_LOGV(TAG, "Direction pins set: theta=%d (dir=%ld), rho=%d (dir=%ld)",
+    ESP_LOGI(TAG, "Direction pins set: theta=%d (dir=%ld), rho=%d (dir=%ld)",
         _currentMotion.thetaStepDir > 0 ? 1 : 0, _currentMotion.thetaStepDir,
         _currentMotion.rhoStepDir > 0 ? 1 : 0, _currentMotion.rhoStepDir);
 
-    ESP_LOGV(TAG, "Coupled motion planned: start(%.2f°,%.2fmm) → target(%.2f°,%.2fmm)",
+    ESP_LOGI(TAG, "Coupled motion planned: start(%.2f°,%.3f) → target(%.2f°,%.3f)",
         _currentMotion.startPolar.theta, _currentMotion.startPolar.rho,
         _currentMotion.targetPolar.theta, _currentMotion.targetPolar.rho);
-    ESP_LOGV(TAG, "Bresenham motion steps: theta=%ld, rho=%ld (dirs: %ld, %ld), err=%ld",
-        _bresenham.stepsA, _bresenham.stepsB, _bresenham.dirA, _bresenham.dirB, _bresenham.err);
+    ESP_LOGI(TAG, "Bresenham motion steps: theta=%ld, rho=%ld (dirs: %ld, %ld), err=%ld",
+        _bresenham.thetaSteps, _bresenham.rhoSteps, _bresenham.thetaDir, _bresenham.rhoDir, _bresenham.err);
 
     // Start step generation timer if there's motion to execute
-    if (_bresenham.stepsA > 0 || _bresenham.stepsB > 0) {
-        // Calculate fixed step interval based on path length and feed rate
-        float totalDistance = _currentMotion.totalDistance; // in mm
-        float feedRateMMPerSec = _currentMotion.feedRate / 60.0f; // Convert mm/min to mm/sec
-        if (feedRateMMPerSec <= 0) {
-            feedRateMMPerSec = CONFIG_ROBOT_RHO_MAX_SPEED / 60.0f; // Use max speed if no feedrate specified
+    if (_bresenham.thetaSteps > 0 || _bresenham.rhoSteps > 0) {
+        // Calculate step interval based on RPM feed rate
+        float feedRateRPM = _currentMotion.feedRate;
+        if (feedRateRPM <= 0) {
+            feedRateRPM = CONFIG_ROBOT_RHO_MAX_SPEED; // Use max speed if no feedrate specified
         }
 
-        uint32_t totalSteps = _bresenham.stepsA + _bresenham.stepsB;
+        uint32_t totalSteps = _bresenham.thetaSteps + _bresenham.rhoSteps;
         uint64_t stepInterval;
 
-        if (totalDistance > 0 && totalSteps > 0) {
-            // Calculate interval based on total path time distributed across all steps
-            stepInterval = (uint64_t)((totalDistance / feedRateMMPerSec) * 1000000.0f / totalSteps);
+        if (_currentMotion.totalDistance > 0 && totalSteps > 0) {
+            // Calculate interval based on RPM and motion distance
+            float motionTimeSeconds = _currentMotion.totalDistance / (feedRateRPM / 60.0f); // Normalize motion time
+            stepInterval = (uint64_t)((motionTimeSeconds * 1000000.0f) / totalSteps);
         }
         else {
             // Fallback calculation
@@ -563,7 +480,7 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
 
         // Start debug timer to log motion status every second
         esp_timer_start_periodic(_debugTimer, 1000000); // 1 second
-        ESP_LOGV(TAG, "Motion started - step interval: %llu us (%.1f steps/sec)", stepInterval, 1000000.0f / stepInterval);
+        ESP_LOGI(TAG, "Motion started - step interval: %llu us (%.1f steps/sec)", stepInterval, 1000000.0f / stepInterval);
     }
 }
 
@@ -583,70 +500,64 @@ void IRAM_ATTR PolarRobot::generateSteps() {
         return;
     }
 
-    bool stepA = false, stepB = false;
-    int32_t Sa = _bresenham.stepsA, Sb = _bresenham.stepsB;
+    bool stepTheta = false;
+    bool stepRho = false;
+    int32_t thetaS = _bresenham.thetaSteps;
+    int32_t rhoS = _bresenham.rhoSteps;
 
-    // Bresenham-style step scheduling for coordinated motion
-    if (Sa >= Sb) {
-        // Theta (A) is primary axis
-        _bresenham.err -= Sb;
+    if (thetaS >= rhoS) {
+        _bresenham.err -= rhoS;
         if (_bresenham.err < 0) {
-            _bresenham.err += Sa;
-            stepB = true;  // step rho
+            _bresenham.err += thetaS;
+            stepRho = true;
         }
-        stepA = (Sa > 0);
+        stepTheta = (thetaS > 0);
     }
     else {
-        // Rho (B) is primary axis  
-        _bresenham.err += Sa;
+        _bresenham.err += thetaS;
         if (_bresenham.err > 0) {
-            _bresenham.err -= Sb;
-            stepA = true;  // step theta
+            _bresenham.err -= rhoS;
+            stepTheta = true;
         }
-        stepB = (Sb > 0);
+        stepRho = (rhoS > 0);
     }
 
-    // Generate theta steps using hardware GPIO
-    if (stepA && _bresenham.stepsA > 0) {
-        // Direction pin already set in planMotion() - just generate step pulse
+    if (stepTheta && _bresenham.thetaSteps > 0) {
         gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN, 1);
-        esp_rom_delay_us(2); // Minimum pulse width for stepper drivers (2µs)
+        esp_rom_delay_us(2);
         gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_STEP_PIN, 0);
 
-        _bresenham.stepsA--;
+        _bresenham.thetaSteps--;
         _currentMotion.thetaStepsRemaining--;
-        _thetaPosition += _bresenham.dirA;
+        _thetaPosition += _bresenham.thetaDir;
     }
 
-    // Generate rho steps using hardware GPIO
-    if (stepB && _bresenham.stepsB > 0) {
-        // Direction pin already set in planMotion() - just generate step pulse
+    if (stepRho && _bresenham.rhoSteps > 0) {
         gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 1);
-        esp_rom_delay_us(2); // Minimum pulse width for stepper drivers (2µs)
+        esp_rom_delay_us(2);
         gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 0);
 
-        _bresenham.stepsB--;
+        _bresenham.rhoSteps--;
         _currentMotion.rhoStepsRemaining--;
-        _rhoPosition += _bresenham.dirB;
+        _rhoPosition += _bresenham.rhoDir;
     }
 
-    if (_bresenham.stepsA == 0 && _bresenham.stepsB == 0) {
+    if (_bresenham.thetaSteps == 0 && _bresenham.rhoSteps == 0) {
         gptimer_stop(_stepTimer);
         _currentMotion.active = false;
     }
 }
 
 void PolarRobot::handleStepOverflow() {
-    int32_t thetaRotSteps = CONFIG_ROBOT_THETA_STEPS_PER_ROT * microstepMultiplier * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f);
-    int32_t rhoRotSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * microstepMultiplier;
+    int32_t thetaRotSteps = _homingControl.steps_per_theta_rot * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f);
 
     while (_thetaPosition > thetaRotSteps) {
         _thetaPosition -= thetaRotSteps;
-        _rhoPosition -= rhoRotSteps;
+        _rhoPosition -= CONFIG_ROBOT_RHO_STEPS_PER_ROT;
     }
     while (_thetaPosition <= -thetaRotSteps) {
         _thetaPosition += thetaRotSteps;
-        _rhoPosition += rhoRotSteps;
+        _rhoPosition += CONFIG_ROBOT_RHO_STEPS_PER_ROT;
     }
 }
 
@@ -687,12 +598,10 @@ esp_err_t PolarRobot::emergencyStop() {
 
 RobotStatus PolarRobot::getStatus() {
     RobotStatus status = {};
-    stepsToPolar(_thetaPosition, _rhoPosition, status.polarPosition);
+    if (_isHomed) {
+        stepsToPolar(_thetaPosition, _rhoPosition, status.position);
+    }
 
-    // Convert to cartesian
-    status.position = polarToCartesian(status.polarPosition);
-
-    // Motor status
     status.theta.position = _thetaPosition;
     status.theta.isEnabled = _motorsActive; // Use actual motor activity state
     status.theta.isHomed = _isHomed;
@@ -731,10 +640,7 @@ void PolarRobot::deinit() {
         _debugTimer = nullptr;
     }
 
-    // Disable motors via enable pin
     setMotorsActive(false);
-
-    // Deinitialize homing hardware
     deinitHomingHardware();
 
     delete _thetaStepper;
@@ -745,15 +651,16 @@ void PolarRobot::deinit() {
 }
 
 void PolarRobot::stepsToPolar(int32_t thetaSteps, int32_t rhoSteps, PolarPoint& polar) const {
-    float fullThetaSteps = (float)thetaSteps / microstepMultiplier;
-    float motorRotations = fullThetaSteps / CONFIG_ROBOT_THETA_STEPS_PER_ROT;
-    float driveGearRotations = motorRotations / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // motor -> gear
-    polar.theta = driveGearRotations * 360.0f; // gear rotations -> degrees
+    float motorRotations = (float)thetaSteps / _homingControl.steps_per_theta_rot; // Convert steps to motor rotations
+    polar.theta = motorRotations * 360.0f; // gear rotations -> degrees
     polar.theta = normalizeAngle(polar.theta); // Normalize to 0-360 degrees
 
-    float fullRhoSteps = (float)rhoSteps / microstepMultiplier;
-    float rhoCounteractSteps = fullThetaSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
-    polar.rho = (fullRhoSteps - rhoCounteractSteps) / CONFIG_ROBOT_RHO_STEPS_PER_MM;
+    float rhoCounteractSteps = (float)thetaSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
+    polar.rho = stepsToNormalizedRho((float)rhoSteps - rhoCounteractSteps); // Convert to normalized 0-1 range
+
+    ESP_LOGI(TAG, "Steps to polar: theta=%d steps (%.2f°), rho=%d steps (%.3f normalized)",
+        thetaSteps, polar.theta, rhoSteps, polar.rho);
+    ESP_LOGI(TAG, "Calculated polar point: (%.2f°, %.3f)", polar.theta, polar.rho);
 }
 
 void PolarRobot::polarToSteps(PolarPoint& polar, int32_t& thetaSteps, int32_t& rhoSteps) const {
@@ -761,12 +668,12 @@ void PolarRobot::polarToSteps(PolarPoint& polar, int32_t& thetaSteps, int32_t& r
     float rho = polar.rho;
 
     float driveGearRotations = theta / 360.0f;
-    float motorRotations = driveGearRotations * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // gear -> motor
-    float thetaFullSteps = motorRotations * CONFIG_ROBOT_THETA_STEPS_PER_ROT; // motor rotations -> steps
-    thetaSteps = thetaFullSteps * microstepMultiplier;
+    thetaSteps = driveGearRotations * _homingControl.steps_per_theta_rot; // motor rotations -> steps
 
-    float rhoFullSteps = rho * CONFIG_ROBOT_RHO_STEPS_PER_MM; // rho in mm -> steps
-    rhoSteps = rhoFullSteps * microstepMultiplier;
+    rhoSteps = normalizedRhoToSteps(rho); // Convert normalized rho (0-1) to steps
+
+    ESP_LOGI(TAG, "Polar to steps: theta=%.2f° (%.2f rotations) → %d steps, rho=%.3f normalized → %d steps",
+        theta, driveGearRotations, thetaSteps, rho, rhoSteps);
 }
 
 void PolarRobot::calculateCoupledMotorSteps(const PolarPoint& startPolar, const PolarPoint& targetPolar,
@@ -780,113 +687,51 @@ void PolarRobot::calculateCoupledMotorSteps(const PolarPoint& startPolar, const 
 
     float rhoCounteractSteps = thetaMotorSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
     rhoMotorSteps = rhoBase + rhoCounteractSteps;
-}
 
-esp_err_t PolarRobot::segmentLongMove(const CartesianPoint& start, const CartesianPoint& target, float feedRate) {
-    // Calculate total distance
-    float totalDistance = sqrtf(
-        powf(target.x - start.x, 2) +
-        powf(target.y - start.y, 2)
-    );
-
-    // Calculate number of segments needed (1mm max per segment)
-    const float maxSegmentLength = 1.0f; // mm
-    int numSegments = (int)ceilf(totalDistance / maxSegmentLength);
-
-    // Ensure we have at least 2 segments for moves > 1mm
-    if (numSegments < 2) {
-        numSegments = 2;
-    }
-
-    // Safety check: limit maximum segments to prevent queue overflow
-    const int maxSegments = _maxQueueSize / 2; // Use half of queue capacity
-    if (numSegments > maxSegments) {
-        ESP_LOGW(TAG, "Move of %.2fmm would require %d segments, limiting to %d",
-            totalDistance, numSegments, maxSegments);
-        numSegments = maxSegments;
-    }
-
-    // Check if we have enough queue space
-    if (numSegments > (int)_commandQueue.available()) {
-        ESP_LOGW(TAG, "Not enough queue space for %d segments (available: %zu)",
-            numSegments, _commandQueue.available());
-        return ESP_ERR_NO_MEM;
-    }
-
-    ESP_LOGI(TAG, "Segmenting %.2fmm move into %d segments of %.2fmm each",
-        totalDistance, numSegments, totalDistance / numSegments);
-
-    // Calculate step size for each segment
-    float deltaX = (target.x - start.x) / numSegments;
-    float deltaY = (target.y - start.y) / numSegments;
-
-    // Create intermediate waypoints along the straight line
-    for (int i = 1; i <= numSegments; i++) {
-        CartesianPoint waypoint = {
-            .x = start.x + (deltaX * i),
-            .y = start.y + (deltaY * i)
-        };
-
-        // Check bounds for this waypoint
-        PolarPoint waypointPolar = cartesianToPolar(waypoint);
-        if (!isInBounds(waypointPolar, CONFIG_ROBOT_RHO_MAX_RADIUS)) {
-            ESP_LOGW(TAG, "Waypoint %d out of bounds", i);
-            return ESP_ERR_INVALID_ARG;
-        }
-
-        // Create motion command for this segment
-        MotionCommand cmd = {
-            .target = waypoint,
-            .feedRate = feedRate > 0 ? feedRate : CONFIG_ROBOT_RHO_MAX_SPEED,
-            .isRelative = false,
-            .commandId = esp_random()
-        };
-
-        // Add to queue
-        if (!_commandQueue.push(cmd)) {
-            ESP_LOGW(TAG, "Failed to queue segment %d - motion queue full", i);
-            return ESP_ERR_NO_MEM;
-        }
-
-        ESP_LOGV(TAG, "Segment %d: (%.2f, %.2f) @ %.1f mm/min - queued",
-            i, waypoint.x, waypoint.y, cmd.feedRate);
-    }
-
-    // Cancel any pending inactivity timer since we have new motion
-    esp_timer_stop(_motorInactivityTimer);
-
-    ESP_LOGI(TAG, "Segmented move completed: %d segments queued (queue size: %zu)",
-        numSegments, _commandQueue.count);
-
-    return ESP_OK;
+    ESP_LOGI(TAG, "Coupled motor steps: theta=%d steps, rho=%d steps (rho base: %d + counteract: %.2f)",
+        thetaMotorSteps, rhoMotorSteps, rhoBase, rhoCounteractSteps);
+    ESP_LOGI(TAG, "Delta polar: (%.2f°, %.3f)", deltaPolar.theta, deltaPolar.rho);
+    ESP_LOGI(TAG, "Target polar: (%.2f°, %.3f)", targetPolar.theta, targetPolar.rho);
+    ESP_LOGI(TAG, "Start polar: (%.2f°, %.3f)", startPolar.theta, startPolar.rho);
 }
 
 uint64_t PolarRobot::calculateStepInterval() {
     float thetaTimeSeconds = 0;
     float rhoTimeSeconds = 0;
 
-    if (_bresenham.stepsA > 0) {
-        const float microstepMultiplier = 16.0f;
-        float driveGearRPM = CONFIG_ROBOT_RHO_MAX_SPEED / 60.0f; // Convert max speed to RPM
+    if (_bresenham.thetaSteps > 0) {
+        float driveGearRPM = CONFIG_ROBOT_THETA_MAX_SPEED; // RPM of drive gear
         float motorRPM = driveGearRPM * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Convert gear RPM to motor RPM
-        float fullMotorStepsPerSecond = (motorRPM * CONFIG_ROBOT_THETA_STEPS_PER_ROT) / 60.0f;
-        float microstepsPerSecond = fullMotorStepsPerSecond * microstepMultiplier;
-        thetaTimeSeconds = _bresenham.stepsA / microstepsPerSecond;
+        float stepsPerSec = (motorRPM * _homingControl.steps_per_theta_rot) / 60.0f;
+        thetaTimeSeconds = _bresenham.thetaSteps / stepsPerSec;
     }
 
-    if (_bresenham.stepsB > 0) {
-        const float microstepMultiplier = 16.0f;
-        float feedRateMMPerSec = _currentMotion.feedRate / 60.0f;
-        if (feedRateMMPerSec <= 0) {
-            feedRateMMPerSec = CONFIG_ROBOT_RHO_MAX_SPEED / 60.0f;
+    if (_bresenham.rhoSteps > 0) {
+        float rhoRPM = _currentMotion.feedRate;
+        if (rhoRPM <= 0) {
+            rhoRPM = CONFIG_ROBOT_RHO_MAX_SPEED;
         }
-        float fullStepsPerSecond = feedRateMMPerSec * CONFIG_ROBOT_RHO_STEPS_PER_MM;
-        float microstepsPerSecond = fullStepsPerSecond * microstepMultiplier;
-        rhoTimeSeconds = _bresenham.stepsB / microstepsPerSecond;
+        float stepsPerSec = (rhoRPM * 200) / 60.0f;
+        rhoTimeSeconds = _bresenham.rhoSteps / stepsPerSec;
     }
 
     float totalTimeSeconds = fmaxf(thetaTimeSeconds, rhoTimeSeconds);
-    uint32_t totalSteps = _bresenham.stepsA + _bresenham.stepsB;
+    uint32_t totalSteps = _bresenham.thetaSteps + _bresenham.rhoSteps;
     uint64_t intervalUs = (uint64_t)((totalTimeSeconds * 1000000.0f) / totalSteps);
     return intervalUs;
+}
+
+// Convert normalized rho (0-1) to steps using calibrated maximum
+int32_t PolarRobot::normalizedRhoToSteps(float normalizedRho) const {
+    if (_homingControl.rho_max_steps <= 0) {
+        return 0;
+    }
+    return normalizedRho * (float)_homingControl.rho_max_steps;
+}
+
+float PolarRobot::stepsToNormalizedRho(int32_t steps) const {
+    if (_homingControl.rho_max_steps <= 0) {
+        return 0.0f;
+    }
+    return (float)steps / (float)_homingControl.rho_max_steps;
 }

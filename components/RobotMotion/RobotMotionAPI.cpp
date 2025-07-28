@@ -85,26 +85,14 @@ PolarRobot* RobotMotionSystem::getRobot()
     return _robot;
 }
 
-esp_err_t RobotMotionSystem::moveTo(double x, double y, double feedRate)
-{
-    if (!_robot) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    CartesianPoint target = { .x = (float)x, .y = (float)y };
-    return _robot->moveTo(target, feedRate);
-}
-
 esp_err_t RobotMotionSystem::moveToPolar(double theta, double rho, double feedRate)
 {
     if (!_robot) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    // Convert polar to cartesian and use moveTo
-    PolarPoint polar = { .theta = (float)theta, .rho = (float)rho };
-    CartesianPoint cartesian = PolarRobot::polarToCartesian(polar);
-    return _robot->moveTo(cartesian, feedRate);
+    PolarPoint target = { .theta = (float)theta, .rho = (float)rho };
+    return _robot->moveToPolar(target, feedRate);
 }
 
 esp_err_t RobotMotionSystem::homeAllAxes()

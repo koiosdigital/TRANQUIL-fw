@@ -83,7 +83,8 @@ esp_err_t PolarRobot::homeAll() {
 // ISR-safe version of rho max homing start (seeking maximum radius)
 void IRAM_ATTR PolarRobot::startRhoMaxHomingISR() {
     const float microstepMultiplier = 16.0f;
-    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_MM * CONFIG_ROBOT_RHO_MAX_RADIUS * 2 * microstepMultiplier;
+    // Use an estimated max steps limit for safety during calibration
+    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * microstepMultiplier * 50; // Allow up to 50 rotations
     _homingControl.stepCount = 0;
 
     _rhoStallguardTriggered = false;
@@ -103,33 +104,14 @@ void IRAM_ATTR PolarRobot::startRhoMaxHomingISR() {
 // ISR-safe version of rho min homing start (seeking minimum radius)
 void IRAM_ATTR PolarRobot::startRhoMinHomingISR() {
     const float microstepMultiplier = 16.0f;
-    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_MM * CONFIG_ROBOT_RHO_MAX_RADIUS * 2 * microstepMultiplier;
+    // Use an estimated max steps limit for safety during calibration
+    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * microstepMultiplier * 50; // Allow up to 50 rotations
     _homingControl.stepCount = 0;
 
     _rhoStallguardTriggered = false;
 
     _homingControl.state = HomingState::RHO_SEEKING_MIN;
     gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, 0); // Move inward to min
-
-    uint64_t homingStepInterval = 750;
-    gptimer_alarm_config_t alarm_config = {
-        .alarm_count = homingStepInterval,
-        .flags = {.auto_reload_on_alarm = true}
-    };
-    gptimer_set_alarm_action(_stepTimer, &alarm_config);
-    gptimer_start(_stepTimer);
-}
-
-// ISR-safe version of rho homing start (called from timer interrupt)
-void IRAM_ATTR PolarRobot::startRhoHomingISR() {
-    const float microstepMultiplier = 16.0f;
-    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_MM * CONFIG_ROBOT_RHO_MAX_RADIUS * 2 * microstepMultiplier;
-    _homingControl.stepCount = 0;
-
-    _rhoStallguardTriggered = false;
-
-    _homingControl.state = HomingState::RHO_SEEKING;
-    gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, 0);
 
     uint64_t homingStepInterval = 750;
     gptimer_alarm_config_t alarm_config = {
@@ -163,7 +145,7 @@ void IRAM_ATTR PolarRobot::startThetaCalibrationISR() {
         gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, 1);   // Rho moves in same direction
     }
 
-    uint64_t homingStepInterval = 1000;
+    uint64_t homingStepInterval = 400;
     gptimer_alarm_config_t alarm_config = {
         .alarm_count = homingStepInterval,
         .flags = {.auto_reload_on_alarm = true}
@@ -225,68 +207,26 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
         break;
 
     case HomingState::THETA_SEEKING_FIRST_EDGE:
-        // Check if endstop was triggered by IRQ
         if (_thetaEndstopTriggered) {
             _thetaEndstopTriggered = false; // Clear flag
             _homingControl.first_theta_edge_found = true;
             _homingControl.stepCount = 0; // Reset step count to measure rotation
             _homingControl.thetaStepCounter = 0;
             _homingControl.state = HomingState::THETA_SEEKING_SECOND_EDGE;
-            // Continue moving in same direction to find second edge
-        }
-        else if (_homingControl.stepCount >= _homingControl.maxSteps) {
-            // Homing failed - exceeded maximum steps
-            _homingControl.state = HomingState::ERROR;
-            _homingControl.homingActive = false;
-            gptimer_stop(_stepTimer);
-            return;
         }
         break;
 
     case HomingState::THETA_SEEKING_SECOND_EDGE:
-        // Check if endstop was triggered by IRQ (second rising edge)
         if (_thetaEndstopTriggered) {
-            _homingControl.steps_per_theta_rot = _homingControl.stepCount; // Save rotation steps
+            _homingControl.steps_per_theta_rot = _homingControl.stepCount;
             _thetaPosition = 0; // Set home position
             _thetaEndstopTriggered = false; // Clear flag
-
-            // Stop timer using ISR-safe function
             gptimer_stop(_stepTimer);
-
-            // Calibration complete
             _homingControl.state = HomingState::COMPLETE;
             _homingControl.homingActive = false;
             _isHomed = true;
-            return; // Exit early, no step generation needed
-        }
-        else if (_homingControl.stepCount >= _homingControl.maxSteps) {
-            // Homing failed - exceeded maximum steps
-            _homingControl.state = HomingState::ERROR;
-            _homingControl.homingActive = false;
-            gptimer_stop(_stepTimer);
-            return;
-        }
-        break;
-
-    case HomingState::THETA_SEEKING:
-        // Legacy theta seeking state for backwards compatibility
-        if (_thetaEndstopTriggered) {
-            _thetaPosition = 0; // Set home position
-            _thetaEndstopTriggered = false; // Clear flag
-
-            // Stop timer using ISR-safe function
-            gptimer_stop(_stepTimer);
-
-            if (_homingControl.currentAxis == HomingAxis::SEQUENTIAL_THETA) {
-                // Theta homing complete, entire sequence done
-                _homingControl.state = HomingState::COMPLETE;
-                _homingControl.homingActive = false;
-                _isHomed = true;
-            }
-            else {
-                _homingControl.state = HomingState::COMPLETE;
-                _homingControl.homingActive = false;
-            }
+            _thetaPosition = 0; // Reset position to home
+            _rhoPosition = 0; // Reset rho position to home
             return; // Exit early, no step generation needed
         }
         else if (_homingControl.stepCount >= _homingControl.maxSteps) {
@@ -332,36 +272,6 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
             // Start theta calibration
             _homingControl.currentAxis = HomingAxis::SEQUENTIAL_THETA;
             startThetaCalibrationISR();
-            return; // Exit early, no step generation needed
-        }
-        else if (_homingControl.stepCount >= _homingControl.maxSteps) {
-            // Homing failed - exceeded maximum steps
-            _homingControl.state = HomingState::ERROR;
-            _homingControl.homingActive = false;
-            gptimer_stop(_stepTimer);
-            return;
-        }
-        break;
-
-    case HomingState::RHO_SEEKING:
-        // Legacy rho seeking state for backwards compatibility
-        if (_rhoStallguardTriggered) {
-            _rhoPosition = 0; // Set home position
-            _rhoStallguardTriggered = false; // Clear flag
-
-            // Stop timer using ISR-safe function
-            gptimer_stop(_stepTimer);
-
-            if (_homingControl.currentAxis == HomingAxis::SEQUENTIAL_RHO) {
-                // Rho homing complete, now start theta homing
-                _homingControl.currentAxis = HomingAxis::SEQUENTIAL_THETA;
-                startThetaHomingISR();
-            }
-            else {
-                _homingControl.state = HomingState::COMPLETE;
-                _homingControl.homingActive = false;
-                _isHomed = true;
-            }
             return; // Exit early, no step generation needed
         }
         else if (_homingControl.stepCount >= _homingControl.maxSteps) {
@@ -463,10 +373,6 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
         _homingControl.stepCount++;
     }
 }
-
-// =============================================================================
-// SENSOR READING AND ISR HANDLERS
-// =============================================================================
 
 bool PolarRobot::readThetaEndstop() {
     int level = gpio_get_level((gpio_num_t)CONFIG_ROBOT_THETA_ENDSTOP_PIN);

@@ -99,13 +99,6 @@ menu "Polar Robot Motion System"
             help
                 Maximum rotational speed for theta axis in RPM (post gearing)
 
-        config ROBOT_THETA_MAX_ACCEL
-            int "Theta Maximum Acceleration (RPM/s)"
-            default 2
-            range 1 100
-            help
-                Maximum acceleration for theta axis in RPM (post gearing)
-
         config ROBOT_THETA_STEPS_PER_ROT
             int "Theta Steps per Motor Rotation (full steps)"
             default 200
@@ -166,25 +159,11 @@ menu "Polar Robot Motion System"
 
     menu "Rho Axis Configuration"
         config ROBOT_RHO_MAX_SPEED
-            int "Rho Maximum Speed (mm/min)"
-            default 600
-            range 10 3000
+            int "Rho Maximum Speed (RPM)"
+            default 15
+            range 1 30
             help
-                Maximum linear speed for rho axis in mm per minute
-
-        config ROBOT_RHO_MAX_ACCEL
-            int "Rho Maximum Acceleration (mm/min²)"
-            default 1200
-            range 100 5000
-            help
-                Maximum acceleration for rho axis in mm/min ^2
-
-        config ROBOT_RHO_STEPS_PER_MM
-            int "Rho Steps per Millimeter (full steps)"
-            default 5
-            range 1 100
-            help
-                Number of full motor steps per millimeter of linear movement (without microstepping)
+                Maximum rotational speed for rho axis in RPM
 
         config ROBOT_RHO_STEPS_PER_ROT
             int "Rho Steps per Motor Rotation (full steps)"
@@ -199,13 +178,6 @@ menu "Polar Robot Motion System"
             range 100 1200
             help
                 Run current for rho motor in milliamps
-
-        config ROBOT_RHO_MAX_RADIUS
-            int "Rho Maximum Radius (mm)"
-            default 150
-            range 50 300
-            help
-                Maximum allowed radius for rho axis movement
 
         config ROBOT_RHO_INVERT_DIRECTION
             bool "Invert Rho Motor Direction"

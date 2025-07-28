@@ -12,7 +12,6 @@ public:
     static PolarRobot* getRobot();
 
     // Motion commands
-    static esp_err_t moveTo(double x, double y, double feedRate = 0);
     static esp_err_t moveToPolar(double theta, double rho, double feedRate = 0);
     static esp_err_t homeAllAxes();
     static esp_err_t stopMotion();

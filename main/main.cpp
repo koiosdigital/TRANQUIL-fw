@@ -101,5 +101,15 @@ extern "C" void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 
+    ESP_LOGI(TAG, "Robot homing complete, calibration: Theta: %d steps / rot, Rho: %d steps max",
+        RobotMotionSystem::getRobot()->getStepsPerThetaRotation(),
+        RobotMotionSystem::getRobot()->getRhoMaxSteps());
+
+    RobotMotionSystem::moveToPolar(0, 0.5, 15);
+    RobotMotionSystem::moveToPolar(90, 0.8, 15);
+    RobotMotionSystem::moveToPolar(180, 0.3, 15);
+    RobotMotionSystem::moveToPolar(270, 0.8, 15);
+    RobotMotionSystem::moveToPolar(0, 0, 15);
+
     ESP_LOGI(TAG, "Robot homing complete");
 }
