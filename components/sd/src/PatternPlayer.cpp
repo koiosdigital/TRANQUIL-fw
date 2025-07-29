@@ -27,7 +27,7 @@ bool PatternPlayer::file_loaded_ = false;
 // Interpolation state
 InterpolationState PatternPlayer::interpolation_state_;
 
-double PatternPlayer::feed_rate_ = 10.0;
+double PatternPlayer::feed_rate_ = 15.0;
 
 esp_err_t PatternPlayer::initialize() {
     if (initialized_) return ESP_OK;
@@ -81,7 +81,10 @@ void PatternPlayer::shutdown() {
 
 esp_err_t PatternPlayer::playPattern(const char* pattern_uuid) {
     if (!initialized_) {
-        ESP_LOGE(TAG, "PatternPlayer not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!RobotMotionSystem::isHomed() || RobotMotionSystem::isPaused()) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -298,20 +301,12 @@ void PatternPlayer::serviceTaskWrapper(void* param) {
 bool PatternPlayer::processPatternLine(const PatternLine& line) {
     if (!line.is_valid) return false;
 
-    // Apply mirroring and offset
-    double mirrored = interpolation_state_.theta_mirrored ? -1.0 : 1.0;
-    double new_theta = line.theta * mirrored +
-        (M_PI * (interpolation_state_.theta_offset_angle / 180.0));
+    double new_theta = line.theta;
     double new_rho = line.rho;
 
     if (line.is_first_line) {
-        // First line (_THRLINE0_)
-        if (interpolation_state_.continue_from_previous) {
-            interpolation_state_.theta_start_offset = new_theta - interpolation_state_.prev_theta;
-        }
-        else {
-            interpolation_state_.theta_start_offset = 0;
-        }
+        // On the first line, just set the current theta/rho as the starting point
+        interpolation_state_.theta_start_offset = 0.0;
         interpolation_state_.prev_theta = new_theta;
         interpolation_state_.prev_rho = new_rho;
         interpolation_state_.is_interpolating = false;
@@ -320,28 +315,26 @@ bool PatternPlayer::processPatternLine(const PatternLine& line) {
     }
 
     // Regular line (_THRLINEN_) - setup interpolation
-    double delta_theta = new_theta - interpolation_state_.theta_start_offset - interpolation_state_.prev_theta;
+    double delta_theta = new_theta - interpolation_state_.prev_theta;
     double abs_delta_theta = fabs(delta_theta);
     double adapted_step_angle = interpolation_state_.step_angle;
 
-    if (interpolation_state_.step_adaptation) {
-        double abs_new_rho = fabs(new_rho);
-        double abs_prev_rho = fabs(interpolation_state_.prev_rho);
-        double avg_rho = abs_new_rho > abs_prev_rho ? abs_new_rho : abs_prev_rho;
-        if (avg_rho > 1) avg_rho = 1;
+    double abs_new_rho = fabs(new_rho);
+    double abs_prev_rho = fabs(interpolation_state_.prev_rho);
+    double avg_rho = abs_new_rho > abs_prev_rho ? abs_new_rho : abs_prev_rho;
+    if (avg_rho > 1) avg_rho = 1;
 
-        double max_step_angle = interpolation_state_.step_angle * 16;
-        if (max_step_angle > M_PI / 2) max_step_angle = M_PI / 2;
-        double min_step_angle = interpolation_state_.step_angle / 4;
+    double max_step_angle = interpolation_state_.step_angle * 16;
+    if (max_step_angle > M_PI / 2) max_step_angle = M_PI / 2;
+    double min_step_angle = interpolation_state_.step_angle / 4;
 
-        if (avg_rho > RHO_AT_DEFAULT_STEP_ANGLE) {
-            adapted_step_angle = ((avg_rho - RHO_AT_DEFAULT_STEP_ANGLE) / (1 - RHO_AT_DEFAULT_STEP_ANGLE)) *
-                (min_step_angle - interpolation_state_.step_angle) + interpolation_state_.step_angle;
-        }
-        else {
-            adapted_step_angle = (avg_rho / RHO_AT_DEFAULT_STEP_ANGLE) *
-                (interpolation_state_.step_angle - max_step_angle) + max_step_angle;
-        }
+    if (avg_rho > RHO_AT_DEFAULT_STEP_ANGLE) {
+        adapted_step_angle = ((avg_rho - RHO_AT_DEFAULT_STEP_ANGLE) / (1 - RHO_AT_DEFAULT_STEP_ANGLE)) *
+            (min_step_angle - interpolation_state_.step_angle) + interpolation_state_.step_angle;
+    }
+    else {
+        adapted_step_angle = (avg_rho / RHO_AT_DEFAULT_STEP_ANGLE) *
+            (interpolation_state_.step_angle - max_step_angle) + max_step_angle;
     }
 
     interpolation_state_.theta_inc = delta_theta >= 0 ? adapted_step_angle : -adapted_step_angle;
@@ -375,12 +368,18 @@ void PatternPlayer::calcXYPos(double theta, double rho, double& x, double& y) {
 }
 
 void PatternPlayer::serviceInterpolation() {
-    if (!interpolation_state_.in_progress) return;
-    if (!interpolation_state_.is_interpolating) return;
+    if (!interpolation_state_.in_progress) {
+        return;
+    }
+    if (!interpolation_state_.is_interpolating) {
+        return;
+    }
 
     // Process multiple steps if possible
     for (int i = 0; i < PROCESS_STEPS_PER_SERVICE; i++) {
+        //ESP_LOGI(TAG, "serviceInterpolation: step %d/%d", interpolation_state_.cur_step, interpolation_state_.interpolate_steps);
         if (interpolation_state_.cur_step >= interpolation_state_.interpolate_steps) {
+            //ESP_LOGI(TAG, "serviceInterpolation: finished interpolation");
             interpolation_state_.in_progress = false;
             return;
         }
@@ -401,19 +400,23 @@ void PatternPlayer::serviceInterpolation() {
         double robot_theta = interpolation_state_.cur_theta;
         double robot_rho = interpolation_state_.cur_rho;
 
-        // Send command to robot
+        // Ensure theta is in range [0, 2*PI)
+        while (robot_theta < 0) {
+            robot_theta += 2 * M_PI;
+        }
+        while (robot_theta >= 2 * M_PI) {
+            robot_theta -= 2 * M_PI;
+        }
+
         esp_err_t ret = RobotMotionSystem::moveToPolar(robot_theta, robot_rho, feed_rate_);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to send polar move command: %s (%.02f, %02f)", esp_err_to_name(ret), robot_theta, robot_rho);
-
+            ESP_LOGW(TAG, "Failed to send polar move command: %s (%.02f, %.02f)", esp_err_to_name(ret), robot_theta, robot_rho);
             if (ret != ESP_ERR_NO_MEM) {
                 ESP_LOGE(TAG, "Stopping interpolation due to error: %s", esp_err_to_name(ret));
                 stop();
             }
-
             return;
         }
-
         ESP_LOGD(TAG, "Polar move: theta=%.6f, rho=%.6f (step %d/%d)",
             robot_theta, robot_rho, interpolation_state_.cur_step, interpolation_state_.interpolate_steps);
     }
@@ -423,28 +426,33 @@ void PatternPlayer::serviceTask() {
     ESP_LOGI(TAG, "Service task started");
 
     while (true) {
-        // Service interpolation first (if in progress)
         serviceInterpolation();
 
         // Check if we should be playing and can process new lines
         if (playback_state_ == PlaybackState::PLAYING && file_loaded_ && !interpolation_state_.in_progress) {
+            //ESP_LOGI(TAG, "serviceTask: ready to process new line, current_line_index=%zu, total_lines=%zu", current_line_index_, total_lines_);
             if (hasMoreLines()) {
                 PatternLine line = peekNextLine();
+                //ESP_LOGI(TAG, "serviceTask: peeked line valid=%d, theta=%.6f, rho=%.6f, first=%d", (int)line.is_valid, line.theta, line.rho, (int)line.is_first_line);
                 if (line.is_valid) {
                     // Process the line (setup interpolation or immediate move)
                     if (processPatternLine(line)) {
-                        // Pop the line after successful processing
+                        //ESP_LOGI(TAG, "serviceTask: processed line, popping line");
+                         // Pop the line after successful processing
                         popLine();
-
                         ESP_LOGI(TAG, "Processed line, theta=%.6f, rho=%.6f, first=%s",
                             line.theta, line.rho,
                             line.is_first_line ? "true" : "false");
                     }
                 }
                 else {
+                    ESP_LOGI(TAG, "serviceTask: invalid line, skipping");
                     // Invalid line, skip it
                     popLine();
                 }
+            }
+            else {
+                ESP_LOGI(TAG, "serviceTask: no more lines");
             }
         }
 

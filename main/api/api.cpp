@@ -13,7 +13,9 @@
 
 #include "cloud_api.h"
 #include "patterns_api.h"
+#include "playlists_api.h"
 #include "api_player.h"
+#include "led_api.h"
 
 //#include "static_files.h"
 
@@ -356,7 +358,9 @@ void api_init() {
 
     cloud_api_register_handlers(server);
     patterns_api_register_handlers(server);
+    playlists_api_register_handlers(server);
     api_player_register_endpoints(server);
+    led_api_register_handlers(server);
 
     /*
     // Create an array of httpd_uri_t to keep them alive after the loop

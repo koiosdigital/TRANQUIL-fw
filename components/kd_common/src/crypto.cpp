@@ -355,9 +355,7 @@ esp_err_t ensure_key_exists() {
 
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    while (xSemaphoreTake(keygen_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-        ESP_LOGI(TAG, "keygen_task still running");
-    }
+    while (xSemaphoreTake(keygen_mutex, portMAX_DELAY) != pdTRUE) {}
 
     calculate_rinv_mprime(&rsa.private_N, &rinv, &mprime);
     params = (esp_ds_p_data_t*)calloc(1, sizeof(esp_ds_p_data_t));

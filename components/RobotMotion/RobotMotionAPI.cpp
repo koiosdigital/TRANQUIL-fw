@@ -38,7 +38,7 @@ esp_err_t RobotMotionSystem::init()
         "robot_motion",
         8192,  // Configurable stack size
         nullptr,                              // Task parameters
-        5,    // Configurable priority
+        2,    // Configurable priority
         nullptr                               // Task handle
     );
 
@@ -91,7 +91,7 @@ esp_err_t RobotMotionSystem::moveToPolar(double theta, double rho, double feedRa
         return ESP_ERR_INVALID_STATE;
     }
 
-    PolarPoint target = { .theta = (float)theta, .rho = (float)rho };
+    PolarPoint target = { .theta = theta, .rho = rho };
     return _robot->moveToPolar(target, feedRate);
 }
 

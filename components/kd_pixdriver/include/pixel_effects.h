@@ -3,15 +3,33 @@
 #include "kd_pixdriver.h"
 #include <cstdint>
 #include <vector>
+#include <unordered_map>
+#include <functional>
 
 class PixelEffectEngine {
 public:
     explicit PixelEffectEngine(uint32_t update_rate_hz);
-
     void updateEffect(PixelChannel* channel, uint32_t tick);
+
+    // New: effect registry type and registration methods
+    struct EffectInfo {
+        std::string id;
+        std::string display_name;
+    };
+    using EffectFn = std::function<void(PixelEffectEngine*, PixelChannel*, uint32_t)>;
+    void registerEffect(const std::string& name, const std::string& display_name, EffectFn fn);
+    void registerEffect(const std::string& name, EffectFn fn);
+    void unregisterEffect(const std::string& name);
+    std::vector<EffectInfo> getAllEffects() const;
 
 private:
     uint32_t update_rate_hz_;
+
+    struct EffectEntry {
+        EffectFn fn;
+        std::string display_name;
+    };
+    std::unordered_map<std::string, EffectEntry> effect_registry_;
 
     // Effect implementations
     void applySolid(PixelChannel* channel);

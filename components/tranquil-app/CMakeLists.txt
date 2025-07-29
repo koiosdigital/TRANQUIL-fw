@@ -1,11 +1,11 @@
-# clock-app component CMakeLists.txt
+# tranquil-app component CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
 
 # Set component name
-set(COMPONENT_NAME "clock-app")
+set(COMPONENT_NAME "tranquil-app")
 
 # Define the GitHub repository details
-set(GITHUB_REPO "koiosdigital/clock-app")
+set(GITHUB_REPO "koiosdigital/tranquil-app")
 set(STATIC_FILES_HEADER "static_files.h")
 set(DOWNLOAD_DIR "${CMAKE_CURRENT_BINARY_DIR}/downloads")
 set(INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/include")
@@ -82,7 +82,7 @@ idf_component_register(
 # ESP-IDF early expansion boundary - everything after this only runs during actual build
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
 
-    message(STATUS "Processing clock-app component download logic...")
+    message(STATUS "Processing tranquil-app component download logic...")
 
     # Get the latest release tag
     get_latest_release_tag(${GITHUB_REPO} LATEST_TAG)
@@ -125,7 +125,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endif()
 
     # Print detailed status information
-    message(STATUS "Clock-app component configured:")
+    message(STATUS "tranquil-app component configured:")
     message(STATUS "  Repository: ${GITHUB_REPO}")
     message(STATUS "  Target file: ${STATIC_FILES_HEADER}")
     message(STATUS "  Download URL: ${DOWNLOAD_URL}")

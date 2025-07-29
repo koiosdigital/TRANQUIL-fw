@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <unordered_map>
+#include <functional>
 
 static const char* TAG = "kd_pixdriver";
 static const char* NVS_NAMESPACE = "pixdriver";
@@ -83,6 +85,7 @@ void PixelDriver::initialize(uint32_t update_rate_hz) {
 
     update_rate_hz_ = update_rate_hz;
     effect_engine_ = std::make_unique<PixelEffectEngine>(update_rate_hz);
+    // register_builtin_pixel_effects(); // No longer needed, handled in PixelEffectEngine
     initialized_ = true;
     ESP_LOGI(TAG, "PixelDriver initialized with %lu Hz update rate", update_rate_hz);
 }
@@ -206,7 +209,7 @@ void PixelDriver::start() {
     if (running_ || !initialized_) return;
 
     running_ = true;
-    xTaskCreate(driverTaskWrapper, "pixdriver", 4096, nullptr, 7, &task_handle_);
+    xTaskCreate(driverTask, "pixdriver", 4096, nullptr, 7, &task_handle_);
     ESP_LOGI(TAG, "PixelDriver started");
 }
 
@@ -225,10 +228,10 @@ bool PixelDriver::isRunning() {
     return running_;
 }
 
-void PixelDriver::setAllChannelsEffect(PixelEffect effect) {
+void PixelDriver::setAllChannelsEffect(const std::string& effect_id) {
     for (auto& channel : channels_) {
         EffectConfig config = channel->getEffectConfig();
-        config.effect = effect;
+        config.effect = effect_id;
         channel->setEffect(config);
     }
 }
@@ -277,11 +280,7 @@ float PixelDriver::getCurrentScaleFactor() {
     return static_cast<float>(available_current) / total_current;
 }
 
-void PixelDriver::driverTaskWrapper(void* param) {
-    driverTask();
-}
-
-void PixelDriver::driverTask() {
+void PixelDriver::driverTask(void* param) {
     TickType_t last_wake_time = xTaskGetTickCount();
     const TickType_t update_period = pdMS_TO_TICKS(1000 / update_rate_hz_);
     uint32_t tick = 0;
@@ -324,7 +323,7 @@ PixelChannel::PixelChannel(int32_t id, const ChannelConfig& config)
     scaled_buffer_.resize(config.pixel_count, PixelColor(0, 0, 0, 0));
 
     // Initialize with default effect
-    effect_config_.effect = PixelEffect::SOLID;
+    effect_config_.effect = "SOLID";
     effect_config_.color = PixelColor(100, 100, 100, 0);
     effect_config_.brightness = 255;
     effect_config_.speed = 5;
@@ -608,14 +607,19 @@ void PixelChannel::saveToNVS() const {
         return;
     }
 
-    err = nvs_set_blob(nvs_handle, key, &effect_config_, sizeof(EffectConfig));
-    if (err == ESP_OK) {
-        nvs_commit(nvs_handle);
+    // Save effect type as string
+    err = nvs_set_str(nvs_handle, (std::string(key) + ":effect").c_str(), effect_config_.effect.c_str());
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to save effect type for channel %ld: %s", id_, esp_err_to_name(err));
     }
-    else {
-        ESP_LOGW(TAG, "Failed to save channel %ld config: %s", id_, esp_err_to_name(err));
-    }
+    // Save other fields as needed (color, brightness, speed, enabled, etc.)
+    err = nvs_set_blob(nvs_handle, (std::string(key) + ":color").c_str(), &effect_config_.color, sizeof(PixelColor));
+    nvs_set_u8(nvs_handle, (std::string(key) + ":brightness").c_str(), effect_config_.brightness);
+    nvs_set_u8(nvs_handle, (std::string(key) + ":speed").c_str(), effect_config_.speed);
+    nvs_set_u8(nvs_handle, (std::string(key) + ":enabled").c_str(), effect_config_.enabled ? 1 : 0);
+    // Mask and other fields can be added similarly if needed
 
+    nvs_commit(nvs_handle);
     nvs_close(nvs_handle);
 }
 
@@ -630,14 +634,23 @@ void PixelChannel::loadFromNVS() {
         return;
     }
 
-    size_t required_size = sizeof(EffectConfig);
-    err = nvs_get_blob(nvs_handle, key, &effect_config_, &required_size);
-    if (err != ESP_OK) {
-        ESP_LOGI(TAG, "Failed to load config for channel %ld, using defaults", id_);
+    // Load effect type as string
+    char effect_str[32] = { 0 };
+    size_t effect_str_len = sizeof(effect_str);
+    if (nvs_get_str(nvs_handle, (std::string(key) + ":effect").c_str(), effect_str, &effect_str_len) == ESP_OK) {
+        effect_config_.effect = effect_str;
     }
-    else {
-        ESP_LOGI(TAG, "Loaded config for channel %ld", id_);
+    // Load other fields as needed
+    PixelColor color;
+    size_t color_size = sizeof(PixelColor);
+    if (nvs_get_blob(nvs_handle, (std::string(key) + ":color").c_str(), &color, &color_size) == ESP_OK) {
+        effect_config_.color = color;
     }
+    uint8_t val = 0;
+    if (nvs_get_u8(nvs_handle, (std::string(key) + ":brightness").c_str(), &val) == ESP_OK) effect_config_.brightness = val;
+    if (nvs_get_u8(nvs_handle, (std::string(key) + ":speed").c_str(), &val) == ESP_OK) effect_config_.speed = val;
+    if (nvs_get_u8(nvs_handle, (std::string(key) + ":enabled").c_str(), &val) == ESP_OK) effect_config_.enabled = (val != 0);
+    // Mask and other fields can be added similarly if needed
 
     nvs_close(nvs_handle);
 }

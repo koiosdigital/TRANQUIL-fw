@@ -19,19 +19,6 @@ struct cloud_login_response {
     bool success;   // true = 200, false = error
 };
 
-static void cloud_login_response_sender(void* arg) {
-    cloud_login_response* resp = (cloud_login_response*)arg;
-    if (resp->success) {
-        httpd_resp_set_type(resp->req, "application/json");
-        httpd_resp_send(resp->req, resp->response, strlen(resp->response));
-    }
-    else {
-        httpd_resp_send_err(resp->req, HTTPD_500_INTERNAL_SERVER_ERROR, resp->response);
-    }
-    free(resp->response);
-    free(resp);
-}
-
 esp_err_t cloud_token_get_handler(httpd_req_t* req) {
     nvs_handle_t nvs;
     char token[512] = { 0 };

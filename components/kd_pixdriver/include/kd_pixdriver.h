@@ -63,12 +63,15 @@ struct ChannelConfig {
 };
 
 struct EffectConfig {
-    PixelEffect effect = PixelEffect::SOLID;
+    std::string effect = "SOLID"; // Effect ID string
     PixelColor color{ 100, 100, 100, 0 };
     uint8_t brightness = 255;
     uint8_t speed = 10;  // 1-10 scale
     bool enabled = true;
     std::vector<uint8_t> mask;  // Optional pixel mask
+
+    // Custom effect name for custom effect types (deprecated, use effect)
+    std::string custom_effect_name;
 
     // Custom effect callback
     std::function<void(std::vector<PixelColor>&, uint32_t)> custom_effect;
@@ -93,6 +96,7 @@ public:
     static PixelChannel* getChannel(int32_t channel_id);
     static PixelChannel* getMainChannel();  // Returns the first channel added
     static std::vector<int32_t> getChannelIds();
+    static PixelEffectEngine* getEffectEngine() { return effect_engine_.get(); }
 
     // Global settings
     static void setCurrentLimit(int32_t limit_ma);  // -1 for unlimited
@@ -107,12 +111,11 @@ public:
     static bool isRunning();
 
     // Global effects
-    static void setAllChannelsEffect(PixelEffect effect);
+    static void setAllChannelsEffect(const std::string& effect_id);
     static void setAllChannelsColor(const PixelColor& color);
     static void setAllChannelsBrightness(uint8_t brightness);
     static void setAllChannelsEnabled(bool enabled);
 
-    // Statistics
     static uint32_t getTotalCurrentConsumption();
     static uint32_t getScaledCurrentConsumption();
     static float getCurrentScaleFactor();
@@ -124,8 +127,7 @@ private:
     PixelDriver(const PixelDriver&) = delete;
     PixelDriver& operator=(const PixelDriver&) = delete;
 
-    static void driverTask();
-    static void driverTaskWrapper(void* param);
+    static void driverTask(void* param);
     static void updateChannels();
     static void applyCurrentLimiting();
 
@@ -185,6 +187,7 @@ private:
     static void i2sTaskWrapper(void* param);
     void i2sTask();
     static bool i2sTxCallback(i2s_chan_handle_t handle, i2s_event_data_t* event, void* user_ctx);
+    void applyCurrentLimiting();
 
     int32_t id_;
     ChannelConfig config_;

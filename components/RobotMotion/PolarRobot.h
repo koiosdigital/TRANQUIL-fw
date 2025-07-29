@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
+#include "freertos/task.h"
 #include <cmath>
 
 // Motor status
@@ -97,6 +98,8 @@ public:
 
     // Service - call regularly from main task
     void service();
+
+    void setCommandNotifyTask(TaskHandle_t task) { _commandNotifyTask = task; }
 
 private:
     // Hardware interfaces
@@ -227,8 +230,8 @@ private:
     bool readThetaEndstop();
 
     // Utilities
-    static float normalizeAngle(float angle);
-    static float calculateMinRotation(float target, float current);
+    static double normalizeAngle(double angle);
+    static double calculateMinRotation(double target, double current);
     void updatePosition();
     void handleStepOverflow();
 
@@ -240,9 +243,12 @@ private:
         int32_t& thetaMotorSteps, int32_t& rhoMotorSteps) const;
 
     // Convert normalized rho (0-1) to steps using calibrated maximum
-    int32_t normalizedRhoToSteps(float normalizedRho) const;
-    float stepsToNormalizedRho(int32_t steps) const;
+    int32_t normalizedRhoToSteps(double normalizedRho) const;
+    double stepsToNormalizedRho(int32_t steps) const;
 
     // Kinematic validation functions
     esp_err_t validateKinematics() const;
+
+    TaskHandle_t _commandNotifyTask = nullptr;
+    void notifyCommandReadyFromISR();
 };

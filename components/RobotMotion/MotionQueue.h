@@ -9,8 +9,8 @@
 
 // Polar coordinates
 struct PolarPoint {
-    float theta;  // Angle in degrees
-    float rho;    // Normalized radius (0.0 = center, 1.0 = maximum)
+    double theta;  // Angle in radians (0 - 2PI)
+    double rho;    // Normalized radius (0.0 = center, 1.0 = maximum)
 };
 
 // Motion command

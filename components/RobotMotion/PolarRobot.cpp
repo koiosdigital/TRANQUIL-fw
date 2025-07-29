@@ -201,28 +201,28 @@ void PolarRobot::updateMotorEnableState() {
 
 // Coordinate transformation functions (removed - now pure polar)
 
-float PolarRobot::normalizeAngle(float angle) {
-    while (angle < 0) angle += 360.0f;
-    while (angle > 360.0f) angle -= 360.0f;
+double PolarRobot::normalizeAngle(double angle) {
+    while (angle < 0) angle += 2 * M_PI;
+    while (angle > 2 * M_PI) angle -= 2 * M_PI;
     return angle;
 }
 
-float PolarRobot::calculateMinRotation(float target, float current) {
-    float diff = target - current;
+double PolarRobot::calculateMinRotation(double target, double current) {
+    double diff = target - current;
 
     // Find shortest rotation
-    if (diff > 180.0f) {
-        diff -= 360.0f;
+    if (diff > M_PI) {
+        diff -= 2 * M_PI;
     }
-    else if (diff < -180.0f) {
-        diff += 360.0f;
+    else if (diff < -M_PI) {
+        diff += 2 * M_PI;
     }
 
     return diff;
 }
 
 bool PolarRobot::isInBounds(const PolarPoint& polar) {
-    return (polar.rho >= 0.0f && polar.rho <= 1.0f);
+    return (polar.theta >= 0.0f && polar.theta <= 2.0f * M_PI && polar.rho >= 0.0f && polar.rho <= 1.0f);
 }
 
 esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
@@ -230,18 +230,15 @@ esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    PolarPoint wrappedTarget = target;
-    wrappedTarget.theta = normalizeAngle(target.theta);
-
     // Check bounds
-    if (!isInBounds(wrappedTarget)) {
+    if (!isInBounds(target)) {
         ESP_LOGW(TAG, "Target out of bounds");
         return ESP_ERR_INVALID_ARG;
     }
 
     // Create motion command for polar move
     MotionCommand cmd = {
-        .target = wrappedTarget,
+        .target = target,
         .feedRate = feedRate > 0 ? feedRate : CONFIG_ROBOT_RHO_MAX_SPEED,
         .isRelative = false,
         .commandId = esp_random()
@@ -252,26 +249,29 @@ esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
         return ESP_ERR_NO_MEM;
     }
 
+    // Notify service task that a new command is available
+    if (_commandNotifyTask) {
+        xTaskNotifyGive(_commandNotifyTask);
+    }
+
     // Cancel any pending inactivity timer since we have new motion
     esp_timer_stop(_motorInactivityTimer);
 
     ESP_LOGD(TAG, "Move to polar (%.2f°, %.3f) @ %.1f RPM - queued (queue size: %zu)",
-        wrappedTarget.theta, wrappedTarget.rho, cmd.feedRate, _commandQueue.getCount());
+        target.theta, target.rho, cmd.feedRate, _commandQueue.getCount());
     return ESP_OK;
 }
 
 void PolarRobot::service() {
-    // Check if homing just completed and start inactivity timer
-    if (_homingControl.state == HomingState::COMPLETE && !_homingControl.homingActive) {
-        // Reset homing state to idle and start inactivity timer
-        _homingControl.state = HomingState::IDLE;
-        const uint64_t INACTIVITY_TIMEOUT_US = 2000000; // 2 seconds
-        esp_timer_start_once(_motorInactivityTimer, INACTIVITY_TIMEOUT_US);
-    }
-
-    // Handle motion command loading when not homing
-    if (!_currentMotion.active && !_homingControl.homingActive) {
-        loadNextCommand();
+    // This task should be registered as the notification target before calling service()
+    setCommandNotifyTask(xTaskGetCurrentTaskHandle());
+    while (true) {
+        // Wait for notification from ISR (step completion or no motion)
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        // Only load next command if not homing
+        if (!_currentMotion.active && !_homingControl.homingActive) {
+            loadNextCommand();
+        }
     }
 }
 
@@ -326,7 +326,7 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
     // Calculate motion timing based on angular movement
     float thetaDelta = fabs(calculateMinRotation(_currentMotion.targetPolar.theta, _currentMotion.startPolar.theta));
     float rhoDelta = fabs(_currentMotion.targetPolar.rho - _currentMotion.startPolar.rho);
-    _currentMotion.totalDistance = fmaxf(thetaDelta / 360.0f, rhoDelta); // Normalized motion distance
+    _currentMotion.totalDistance = fmaxf(thetaDelta / 2 * M_PI, rhoDelta); // Normalized motion distance
     _currentMotion.currentDistance = 0;
 
     _currentMotion.feedRate = cmd.feedRate;
@@ -379,6 +379,10 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
         gptimer_set_alarm_action(_stepTimer, &alarm_config);
         gptimer_start(_stepTimer);
         ESP_LOGD(TAG, "Motion started - step interval: %llu us (%.1f steps/sec)", stepInterval, 1000000.0f / stepInterval);
+    }
+    else {
+        _currentMotion.active = false; // No motion to execute
+        notifyCommandReadyFromISR();
     }
 }
 
@@ -443,6 +447,7 @@ void IRAM_ATTR PolarRobot::generateSteps() {
     if (_bresenham.thetaSteps == 0 && _bresenham.rhoSteps == 0) {
         gptimer_stop(_stepTimer);
         _currentMotion.active = false;
+        notifyCommandReadyFromISR();
     }
 }
 
@@ -537,12 +542,12 @@ void PolarRobot::deinit() {
 }
 
 void PolarRobot::stepsToPolar(int32_t thetaSteps, int32_t rhoSteps, PolarPoint& polar) const {
-    float motorRotations = (float)thetaSteps / _homingControl.steps_per_theta_rot; // Convert steps to motor rotations
-    polar.theta = motorRotations * 360.0f; // gear rotations -> degrees
+    double motorRotations = (double)thetaSteps / _homingControl.steps_per_theta_rot; // Convert steps to motor rotations
+    polar.theta = motorRotations * 2 * M_PI; // gear rotations -> degrees
     polar.theta = normalizeAngle(polar.theta); // Normalize to 0-360 degrees
 
-    float rhoCounteractSteps = (float)thetaSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
-    polar.rho = stepsToNormalizedRho((float)rhoSteps - rhoCounteractSteps); // Convert to normalized 0-1 range
+    double rhoCounteractSteps = (double)thetaSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
+    polar.rho = stepsToNormalizedRho((double)rhoSteps - rhoCounteractSteps); // Convert to normalized 0-1 range
 
     ESP_LOGD(TAG, "Steps to polar: theta=%d steps (%.2f°), rho=%d steps (%.3f normalized)",
         thetaSteps, polar.theta, rhoSteps, polar.rho);
@@ -550,10 +555,10 @@ void PolarRobot::stepsToPolar(int32_t thetaSteps, int32_t rhoSteps, PolarPoint& 
 }
 
 void PolarRobot::polarToSteps(PolarPoint& polar, int32_t& thetaSteps, int32_t& rhoSteps) const {
-    float theta = polar.theta;
-    float rho = polar.rho;
+    double theta = polar.theta;
+    double rho = polar.rho;
 
-    float driveGearRotations = theta / 360.0f;
+    double driveGearRotations = theta / (2 * M_PI); // Convert theta from radians to gear rotations
     thetaSteps = driveGearRotations * _homingControl.steps_per_theta_rot; // motor rotations -> steps
 
     rhoSteps = normalizedRhoToSteps(rho); // Convert normalized rho (0-1) to steps
@@ -571,7 +576,7 @@ void PolarRobot::calculateCoupledMotorSteps(const PolarPoint& startPolar, const 
     int32_t rhoBase;
     polarToSteps(deltaPolar, thetaMotorSteps, rhoBase);
 
-    float rhoCounteractSteps = thetaMotorSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
+    double rhoCounteractSteps = thetaMotorSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
     rhoMotorSteps = rhoBase + rhoCounteractSteps;
 
     ESP_LOGD(TAG, "Coupled motor steps: theta=%d steps, rho=%d steps (rho base: %d + counteract: %.2f)",
@@ -608,16 +613,26 @@ uint64_t PolarRobot::calculateStepInterval() {
 }
 
 // Convert normalized rho (0-1) to steps using calibrated maximum
-int32_t PolarRobot::normalizedRhoToSteps(float normalizedRho) const {
+int32_t PolarRobot::normalizedRhoToSteps(double normalizedRho) const {
     if (_homingControl.rho_max_steps <= 0) {
         return 0;
     }
-    return normalizedRho * (float)_homingControl.rho_max_steps;
+    return normalizedRho * (double)_homingControl.rho_max_steps;
 }
 
-float PolarRobot::stepsToNormalizedRho(int32_t steps) const {
+double PolarRobot::stepsToNormalizedRho(int32_t steps) const {
     if (_homingControl.rho_max_steps <= 0) {
         return 0.0f;
     }
-    return (float)steps / (float)_homingControl.rho_max_steps;
+    return (double)steps / (double)_homingControl.rho_max_steps;
+}
+
+void PolarRobot::notifyCommandReadyFromISR() {
+    if (_commandNotifyTask) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        vTaskNotifyGiveFromISR(_commandNotifyTask, &xHigherPriorityTaskWoken);
+        if (xHigherPriorityTaskWoken) {
+            portYIELD_FROM_ISR();
+        }
+    }
 }

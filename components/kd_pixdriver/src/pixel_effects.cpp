@@ -3,11 +3,41 @@
 #include "esp_random.h"
 #include <algorithm>
 #include <cmath>
+#include <vector>
+#include <utility>
+#include <unordered_map>
+#include <functional>
 
 PixelEffectEngine::PixelEffectEngine(uint32_t update_rate_hz)
     : update_rate_hz_(update_rate_hz) {
     // Reserve space for a reasonable number of channels
     channel_states_.reserve(8);
+
+    // Register all built-in effects
+    registerEffect("SOLID", "Solid", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applySolid(channel);
+        });
+    registerEffect("BLINK", "Blink", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applyBlink(channel, tick);
+        });
+    registerEffect("BREATHE", "Breathe", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applyBreathe(channel, tick);
+        });
+    registerEffect("CYCLIC", "Cyclic", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applyCyclic(channel, tick);
+        });
+    registerEffect("RAINBOW", "Rainbow", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applyRainbow(channel, tick);
+        });
+    registerEffect("COLOR_WIPE", "Color Wipe", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applyColorWipe(channel, tick);
+        });
+    registerEffect("THEATER_CHASE", "Theater Chase", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applyTheaterChase(channel, tick);
+        });
+    registerEffect("SPARKLE", "Sparkle", [](PixelEffectEngine* engine, PixelChannel* channel, uint32_t tick) {
+        engine->applySparkle(channel, tick);
+        });
 }
 
 void PixelEffectEngine::updateEffect(PixelChannel* channel, uint32_t tick) {
@@ -16,34 +46,15 @@ void PixelEffectEngine::updateEffect(PixelChannel* channel, uint32_t tick) {
     const auto& config = channel->getEffectConfig();
     ensureChannelState(channel->getId());
 
-    switch (config.effect) {
-    case PixelEffect::SOLID:
+    std::string effect_name = config.effect;
+    // Look up effect in registry
+    auto it = effect_registry_.find(effect_name);
+    if (it != effect_registry_.end()) {
+        it->second.fn(this, channel, tick);
+    }
+    else {
+        // Fallback to solid
         applySolid(channel);
-        break;
-    case PixelEffect::BLINK:
-        applyBlink(channel, tick);
-        break;
-    case PixelEffect::BREATHE:
-        applyBreathe(channel, tick);
-        break;
-    case PixelEffect::CYCLIC:
-        applyCyclic(channel, tick);
-        break;
-    case PixelEffect::RAINBOW:
-        applyRainbow(channel, tick);
-        break;
-    case PixelEffect::COLOR_WIPE:
-        applyColorWipe(channel, tick);
-        break;
-    case PixelEffect::THEATER_CHASE:
-        applyTheaterChase(channel, tick);
-        break;
-    case PixelEffect::SPARKLE:
-        applySparkle(channel, tick);
-        break;
-    case PixelEffect::CUSTOM:
-        applyCustom(channel, tick);
-        break;
     }
 }
 
@@ -276,4 +287,25 @@ void PixelEffectEngine::ensureChannelState(int32_t channel_id) {
         state.rainbow.rainbow_offset = 0;
         state.cyclic.trail_offset = 0;
     }
+}
+
+void PixelEffectEngine::registerEffect(const std::string& name, const std::string& display_name, EffectFn fn) {
+    effect_registry_[name] = EffectEntry{ fn, display_name };
+}
+
+void PixelEffectEngine::registerEffect(const std::string& name, EffectFn fn) {
+    // For backward compatibility, use name as display name
+    registerEffect(name, name, fn);
+}
+
+std::vector<PixelEffectEngine::EffectInfo> PixelEffectEngine::getAllEffects() const {
+    std::vector<EffectInfo> effects;
+    for (const auto& [id, entry] : effect_registry_) {
+        effects.push_back({ id, entry.display_name });
+    }
+    return effects;
+}
+
+void PixelEffectEngine::unregisterEffect(const std::string& name) {
+    effect_registry_.erase(name);
 }

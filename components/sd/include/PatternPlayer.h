@@ -47,10 +47,6 @@ struct InterpolationState {
 
     // Configuration
     double step_angle;
-    bool step_adaptation;
-    bool continue_from_previous;
-    bool theta_mirrored;
-    double theta_offset_angle;
 
     InterpolationState() {
         in_progress = false;
@@ -64,13 +60,7 @@ struct InterpolationState {
         theta_inc = 0.0;
         rho_inc = 0.0;
         theta_start_offset = 0.0;
-
-        // Default configuration (matching Arduino code)
         step_angle = 0.0174533; // ~1 degree in radians (DEFAULT_STEP_ANGLE)
-        step_adaptation = true;
-        continue_from_previous = true;
-        theta_mirrored = true;
-        theta_offset_angle = 1.0; // degrees
     }
 };
 
@@ -155,6 +145,6 @@ private:
     static constexpr uint32_t SERVICE_TASK_DELAY_MS = 10;
     static constexpr size_t SERVICE_TASK_STACK_SIZE = 4096;
     static constexpr UBaseType_t SERVICE_TASK_PRIORITY = 5;
-    static constexpr int PROCESS_STEPS_PER_SERVICE = 3;
+    static constexpr int PROCESS_STEPS_PER_SERVICE = 100;
     static constexpr double RHO_AT_DEFAULT_STEP_ANGLE = 0.3;
 };
