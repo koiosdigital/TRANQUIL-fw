@@ -57,12 +57,14 @@ void ota_task(void* pvParameter) {
 
         if (esp_http_client_perform(http_client) != ESP_OK) {
             ESP_LOGE(TAG, "http request failed");
+            vTaskDelay(pdMS_TO_TICKS(1000 * 60 * 60)); // wait 1 hour
             continue;
         }
 
         if (esp_http_client_get_status_code(http_client) != 200) {
             ESP_LOGE(TAG, "http request failed: status %d", esp_http_client_get_status_code(http_client));
             esp_http_client_cleanup(http_client);
+            vTaskDelay(pdMS_TO_TICKS(1000 * 60 * 60)); // wait 1 hour
             continue;
         }
 
@@ -72,6 +74,7 @@ void ota_task(void* pvParameter) {
         cJSON* root = cJSON_Parse(http_response_data);
         if (root == NULL) {
             ESP_LOGE(TAG, "failed to parse json");
+            vTaskDelay(pdMS_TO_TICKS(1000 * 60 * 60)); // wait 1 hour
             continue;
         }
 
@@ -80,6 +83,7 @@ void ota_task(void* pvParameter) {
         if (!cJSON_HasObjectItem(root, "update_available")) {
             ESP_LOGE(TAG, "failed to get update_available");
             cJSON_Delete(root);
+            vTaskDelay(pdMS_TO_TICKS(1000 * 60 * 60)); // wait 1 hour
             continue;
         }
 
@@ -94,6 +98,7 @@ void ota_task(void* pvParameter) {
         if (!cJSON_HasObjectItem(root, "ota_url")) {
             ESP_LOGE(TAG, "failed to get ota_url");
             cJSON_Delete(root);
+            vTaskDelay(pdMS_TO_TICKS(1000 * 60 * 60)); // wait 1 hour
             continue;
         }
 
@@ -119,6 +124,7 @@ void ota_task(void* pvParameter) {
 
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "update failed: %s", esp_err_to_name(err));
+            vTaskDelay(pdMS_TO_TICKS(1000 * 60 * 60)); // wait 1 hour
             continue;
         }
 
@@ -128,5 +134,5 @@ void ota_task(void* pvParameter) {
 }
 
 void ota_init() {
-    xTaskCreate(ota_task, "ota_task", 8192, NULL, 5, NULL);
+    xTaskCreate(ota_task, "ota_task", 8192, NULL, 8, NULL);
 }

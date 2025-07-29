@@ -7,6 +7,9 @@
 #include <string.h>
 #include <time.h>
 #include <algorithm>
+#include <sys/stat.h>
+#include <errno.h>
+#include <dirent.h>
 
 // Static member definitions
 const char* ManifestManager::MANIFEST_PATH = "/sd/manifest.json";
@@ -21,10 +24,19 @@ esp_err_t ManifestManager::initialize() {
 
     init_sd();
 
-    //delete existing manifest if it exists
-    if (remove(MANIFEST_PATH) != 0) {
-        ESP_LOGE(TAG, "Failed to delete existing manifest file");
+    // Ensure pattern directory exists
+    struct stat st = { 0 };
+    if (stat("/sd/patterns", &st) == -1) {
+        if (mkdir("/sd/patterns", 0775) != 0) {
+            ESP_LOGE(TAG, "Failed to create pattern directory: /sd/patterns (%d)", errno);
+            return ESP_FAIL;
+        }
     }
+
+    //delete existing manifest if it exists
+    //if (remove(MANIFEST_PATH) != 0) {
+    //    ESP_LOGE(TAG, "Failed to delete existing manifest file");
+    //}
 
     // Try to load existing manifest
     esp_err_t ret = loadManifest();

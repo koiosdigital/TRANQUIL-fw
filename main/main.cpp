@@ -17,6 +17,7 @@
 #include "kd_pixdriver.h"
 #include "RobotMotionAPI.h"
 #include "ManifestManager.h"
+#include <PatternPlayer.h>
 
 static const char* TAG = "main";
 
@@ -75,10 +76,11 @@ extern "C" void app_main(void)
     kd_common_set_provisioning_pop_token_format(ProvisioningPOPTokenFormat_t::NONE);
     kd_common_init();
 
-    //api_init();
+    api_init();
     KdNTP::init();
 
     ManifestManager::initialize();
+    PatternPlayer::initialize();
 
     PixelDriver::initialize(60); // 60Hz update rate
     PixelDriver::addChannel(ChannelConfig((gpio_num_t)18, 144, PixelFormat::RGBW));

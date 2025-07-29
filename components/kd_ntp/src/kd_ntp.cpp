@@ -44,7 +44,7 @@ bool KdNTP::is_synced() {
 void KdNTP::wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ESP_LOGD(TAG, "WiFi got IP, starting time setup task");
-        xTaskCreate(setup_time_task, "setup_time_task", 4096, NULL, 5, NULL);
+        xTaskCreate(setup_time_task, "setup_time_task", 4096, NULL, 8, NULL);
     }
 }
 

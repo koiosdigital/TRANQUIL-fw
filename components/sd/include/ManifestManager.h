@@ -57,10 +57,6 @@ private:
     static esp_err_t loadManifest();
     static esp_err_t saveManifest();
     static esp_err_t createEmptyManifest();
-    static cJSON* patternToJson(const Pattern& pattern);
-    static cJSON* playlistToJson(const Playlist& playlist);
-    static Pattern jsonToPattern(const cJSON* json);
-    static Playlist jsonToPlaylist(const cJSON* json);
     static std::string generateUUID();
 
 public:
@@ -83,6 +79,11 @@ public:
     static std::vector<Playlist> getAllPlaylists();
     static Playlist* getPlaylist(const std::string& uuid);
     static bool playlistExists(const std::string& uuid);
+
+    static cJSON* patternToJson(const Pattern& pattern);
+    static cJSON* playlistToJson(const Playlist& playlist);
+    static Pattern jsonToPattern(const cJSON* json);
+    static Playlist jsonToPlaylist(const cJSON* json);
 
     // Utility functions
     static esp_err_t addPatternToPlaylist(const std::string& playlistUuid, const std::string& patternUuid);

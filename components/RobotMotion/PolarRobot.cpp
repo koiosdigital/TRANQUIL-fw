@@ -222,8 +222,7 @@ float PolarRobot::calculateMinRotation(float target, float current) {
 }
 
 bool PolarRobot::isInBounds(const PolarPoint& polar) {
-    // Theta should be 0-360 degrees, rho should be 0.0-1.0 (normalized)
-    return (polar.theta >= 0 && polar.theta < 360.0f && polar.rho >= 0.0f && polar.rho <= 1.0f);
+    return (polar.rho >= 0.0f && polar.rho <= 1.0f);
 }
 
 esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
@@ -231,15 +230,18 @@ esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
         return ESP_ERR_INVALID_STATE;
     }
 
+    PolarPoint wrappedTarget = target;
+    wrappedTarget.theta = normalizeAngle(target.theta);
+
     // Check bounds
-    if (!isInBounds(target)) {
+    if (!isInBounds(wrappedTarget)) {
         ESP_LOGW(TAG, "Target out of bounds");
         return ESP_ERR_INVALID_ARG;
     }
 
     // Create motion command for polar move
     MotionCommand cmd = {
-        .target = target,
+        .target = wrappedTarget,
         .feedRate = feedRate > 0 ? feedRate : CONFIG_ROBOT_RHO_MAX_SPEED,
         .isRelative = false,
         .commandId = esp_random()
@@ -254,7 +256,7 @@ esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
     esp_timer_stop(_motorInactivityTimer);
 
     ESP_LOGD(TAG, "Move to polar (%.2f°, %.3f) @ %.1f RPM - queued (queue size: %zu)",
-        target.theta, target.rho, cmd.feedRate, _commandQueue.getCount());
+        wrappedTarget.theta, wrappedTarget.rho, cmd.feedRate, _commandQueue.getCount());
     return ESP_OK;
 }
 

@@ -38,7 +38,7 @@ esp_err_t RobotMotionSystem::init()
         "robot_motion",
         8192,  // Configurable stack size
         nullptr,                              // Task parameters
-        4,    // Configurable priority
+        5,    // Configurable priority
         nullptr                               // Task handle
     );
 

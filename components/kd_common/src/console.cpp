@@ -261,38 +261,6 @@ static void register_set_device_cert(void)
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
-
-static struct {
-    struct arg_str* claim_token;
-    struct arg_end* end;
-} set_claim_token_args;
-
-static int set_claim_token(int argc, char** argv)
-{
-    int nerrors = arg_parse(argc, argv, (void**)&set_claim_token_args);
-    if (nerrors != 0) {
-        arg_print_errors(stderr, set_claim_token_args.end, argv[0]);
-        return 1;
-    }
-
-    const char* claim_token_str = set_claim_token_args.claim_token->sval[0];
-    return crypto_set_claim_token((char*)claim_token_str, strlen(claim_token_str));
-}
-
-static void register_set_claim_token(void)
-{
-    set_claim_token_args.claim_token = arg_str1(NULL, NULL, "JWT", "claim JWT");
-    set_claim_token_args.end = arg_end(1);
-
-    const esp_console_cmd_t cmd = {
-        .command = "set_claim_token",
-        .help = "Set claim token",
-        .hint = NULL,
-        .func = &set_claim_token,
-        .argtable = &set_claim_token_args
-    };
-    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
-}
 #endif // KD_COMMON_CRYPTO_DISABLE
 
 static int wifi_reset(int argc, char** argv)
@@ -414,7 +382,6 @@ void console_init() {
     register_set_device_cert();
     register_get_ds_params();
     register_set_ds_params();
-    register_set_claim_token();
 #endif
 
 #if SOC_USB_SERIAL_JTAG_SUPPORTED

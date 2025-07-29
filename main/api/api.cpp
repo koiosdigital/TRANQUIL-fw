@@ -11,6 +11,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "cloud_api.h"
+#include "patterns_api.h"
+#include "api_player.h"
+
 //#include "static_files.h"
 
 /* Empty handle to esp_http_server */
@@ -41,6 +45,7 @@ void server_init() {
     /* Generate default configuration */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 50;
+    config.uri_match_fn = httpd_uri_match_wildcard;
 
     httpd_start(&kd_server, &config);
 }
@@ -346,7 +351,12 @@ void api_init() {
         .method = HTTP_GET,
         .handler = time_zones_handler,
         .user_ctx = NULL
-    };    httpd_register_uri_handler(server, &time_zones_uri);
+    };
+    httpd_register_uri_handler(server, &time_zones_uri);
+
+    cloud_api_register_handlers(server);
+    patterns_api_register_handlers(server);
+    api_player_register_endpoints(server);
 
     /*
     // Create an array of httpd_uri_t to keep them alive after the loop

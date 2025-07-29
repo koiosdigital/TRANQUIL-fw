@@ -82,9 +82,7 @@ esp_err_t PolarRobot::homeAll() {
 
 // ISR-safe version of rho max homing start (seeking maximum radius)
 void IRAM_ATTR PolarRobot::startRhoMaxHomingISR() {
-    const float microstepMultiplier = 16.0f;
-    // Use an estimated max steps limit for safety during calibration
-    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * microstepMultiplier * 50; // Allow up to 50 rotations
+    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * 4000; // Allow up to 50 rotations
     _homingControl.stepCount = 0;
 
     _rhoStallguardTriggered = false;
@@ -103,9 +101,7 @@ void IRAM_ATTR PolarRobot::startRhoMaxHomingISR() {
 
 // ISR-safe version of rho min homing start (seeking minimum radius)
 void IRAM_ATTR PolarRobot::startRhoMinHomingISR() {
-    const float microstepMultiplier = 16.0f;
-    // Use an estimated max steps limit for safety during calibration
-    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * microstepMultiplier * 50; // Allow up to 50 rotations
+    _homingControl.maxSteps = CONFIG_ROBOT_RHO_STEPS_PER_ROT * 4000; // Allow up to 50 rotations
     _homingControl.stepCount = 0;
 
     _rhoStallguardTriggered = false;
@@ -124,8 +120,7 @@ void IRAM_ATTR PolarRobot::startRhoMinHomingISR() {
 
 // ISR-safe version of theta calibration homing start
 void IRAM_ATTR PolarRobot::startThetaCalibrationISR() {
-    const float microstepMultiplier = 16.0f;
-    _homingControl.maxSteps = (CONFIG_ROBOT_THETA_STEPS_PER_ROT * CONFIG_ROBOT_THETA_GEAR_RATIO * 4) * microstepMultiplier; // Allow up to 4 rotations
+    _homingControl.maxSteps = (CONFIG_ROBOT_THETA_STEPS_PER_ROT * CONFIG_ROBOT_THETA_GEAR_RATIO * 4) * 16; // Allow up to 4 rotations
     _homingControl.stepCount = 0;
     _homingControl.thetaStepCounter = 0; // Reset theta step counter for coupled motion
 
@@ -166,7 +161,7 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
     switch (_homingControl.state) {
     case HomingState::THETA_BACKING_OFF:
         // Check if we've backed off the endstop
-        if (!readThetaEndstop()) {
+        if (!_thetaEndstopTriggered) {
             // Now switch to calibration direction (always direction 1) and start seeking
             _homingControl.state = HomingState::THETA_SEEKING_FIRST_EDGE;
             gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, 1); // Calibration direction

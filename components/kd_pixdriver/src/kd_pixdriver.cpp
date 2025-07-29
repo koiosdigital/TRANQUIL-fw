@@ -206,7 +206,7 @@ void PixelDriver::start() {
     if (running_ || !initialized_) return;
 
     running_ = true;
-    xTaskCreate(driverTaskWrapper, "pixdriver", 4096, nullptr, 5, &task_handle_);
+    xTaskCreate(driverTaskWrapper, "pixdriver", 4096, nullptr, 7, &task_handle_);
     ESP_LOGI(TAG, "PixelDriver started");
 }
 

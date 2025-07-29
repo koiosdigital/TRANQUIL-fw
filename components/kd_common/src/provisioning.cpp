@@ -189,5 +189,5 @@ void provisioning_init() {
     esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &provisioning_event_handler, NULL);
     esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &provisioning_event_handler, NULL);
 
-    xTaskCreatePinnedToCore(provisioning_task, "provisioning", 4096, NULL, 2, &xProvisioningTask, 1);
+    xTaskCreatePinnedToCore(provisioning_task, "provisioning", 4096, NULL, 5, &xProvisioningTask, 1);
 }
