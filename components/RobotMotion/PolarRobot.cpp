@@ -39,7 +39,6 @@ PolarRobot::PolarRobot()
     , _rhoStallguardTriggered(false)
     , _motorsActive(false)
     , _motorInactivityTimer(nullptr)
-    , _debugTimer(nullptr)
     , _maxQueueSize(500) // Default fallback size
 {
     g_robotInstance = this;
@@ -69,15 +68,8 @@ esp_err_t PolarRobot::init() {
     };
     ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &_motorInactivityTimer), TAG, "Failed to create inactivity timer");
 
-    // Create debug timer for motion status logging
-    esp_timer_create_args_t debug_timer_args = {
-        .callback = debugTimerCallback,
-        .arg = this,
-        .name = "motion_debug"
-    };
-    ESP_RETURN_ON_ERROR(esp_timer_create(&debug_timer_args, &_debugTimer), TAG, "Failed to create debug timer");
-
     setMotorsActive(false);
+
     return ESP_OK;
 }
 
@@ -149,7 +141,7 @@ esp_err_t PolarRobot::initGPIO() {
         ESP_RETURN_ON_ERROR(gpio_config(&enable_config), TAG, "Failed to configure enable pin");
 
         gpio_set_level((gpio_num_t)CONFIG_ROBOT_COMMON_ENABLE_PIN, 1);
-        ESP_LOGI(TAG, "Common enable pin configured on GPIO %d", CONFIG_ROBOT_COMMON_ENABLE_PIN);
+        ESP_LOGD(TAG, "Common enable pin configured on GPIO %d", CONFIG_ROBOT_COMMON_ENABLE_PIN);
     }
 
     gpio_config_t theta_pins_config = {
@@ -200,16 +192,8 @@ void PolarRobot::motorInactivityCallback(void* arg) {
     robot->updateMotorEnableState();
 }
 
-void PolarRobot::debugTimerCallback(void* arg) {
-    PolarRobot* robot = static_cast<PolarRobot*>(arg);
-    if (robot->_currentMotion.active) {
-        ESP_LOGI(TAG, "Bresenham motion status: theta=%ld remaining, rho=%ld remaining, timer active",
-            robot->_bresenham.thetaSteps, robot->_bresenham.rhoSteps);
-    }
-}
-
 void PolarRobot::updateMotorEnableState() {
-    bool shouldBeActive = (_currentMotion.active || _commandQueue.count > 0);
+    bool shouldBeActive = (_currentMotion.active || !_commandQueue.isEmpty());
     if (!shouldBeActive && _motorsActive) {
         setMotorsActive(false);
     }
@@ -269,94 +253,9 @@ esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
     // Cancel any pending inactivity timer since we have new motion
     esp_timer_stop(_motorInactivityTimer);
 
-    ESP_LOGI(TAG, "Move to polar (%.2f°, %.3f) @ %.1f RPM - queued (queue size: %zu)",
-        target.theta, target.rho, cmd.feedRate, _commandQueue.count);
+    ESP_LOGD(TAG, "Move to polar (%.2f°, %.3f) @ %.1f RPM - queued (queue size: %zu)",
+        target.theta, target.rho, cmd.feedRate, _commandQueue.getCount());
     return ESP_OK;
-}
-
-bool PolarRobot::MotionQueue::init(size_t queueSize) {
-    if (queueSize == 0) {
-        return false;
-    }
-
-    // Limit maximum queue size to prevent excessive memory usage
-    if (queueSize > 1000) {
-        queueSize = 1000;
-    }
-
-    buffer = (MotionCommand*)malloc(queueSize * sizeof(MotionCommand));
-    if (!buffer) {
-        ESP_LOGE(TAG, "Failed to allocate motion queue buffer (%zu bytes)", queueSize * sizeof(MotionCommand));
-        return false;
-    }
-
-    mutex = xSemaphoreCreateMutex();
-    if (!mutex) {
-        free(buffer);
-        buffer = nullptr;
-        return false;
-    }
-
-    size = queueSize;
-    head = tail = count = 0;
-
-    return true;
-}
-
-void PolarRobot::MotionQueue::deinit() {
-    if (buffer) {
-        free(buffer);
-        buffer = nullptr;
-    }
-    if (mutex) {
-        vSemaphoreDelete(mutex);
-        mutex = nullptr;
-    }
-}
-
-bool PolarRobot::MotionQueue::push(const MotionCommand& cmd) {
-    if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) return false;
-
-    bool result = false;
-    if (count < size) {
-        buffer[tail] = cmd;
-        tail = (tail + 1) % size;
-        count++;
-        result = true;
-    }
-
-    xSemaphoreGive(mutex);
-    return result;
-}
-
-bool PolarRobot::MotionQueue::pop(MotionCommand& cmd) {
-    if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) return false;
-
-    bool result = false;
-    if (count > 0) {
-        cmd = buffer[head];
-        head = (head + 1) % size;
-        count--;
-        result = true;
-    }
-
-    xSemaphoreGive(mutex);
-    return result;
-}
-
-bool PolarRobot::MotionQueue::peekLast(MotionCommand& cmd) const {
-    if (xSemaphoreTake(mutex, portMAX_DELAY) != pdTRUE) return false;
-
-    bool result = false;
-    if (count > 0) {
-        // Calculate index of last item (one before tail)
-        size_t lastIndex = (tail == 0) ? (size - 1) : (tail - 1);
-        cmd = buffer[lastIndex];
-        result = true;
-    }
-
-    xSemaphoreGive(mutex);
-    return result;
 }
 
 void PolarRobot::service() {
@@ -380,8 +279,8 @@ bool PolarRobot::loadNextCommand() {
         return false; // No commands in queue
     }
     handleStepOverflow(); // Handle step overflow after motion completion
-    ESP_LOGI(TAG, "Loading next command: target(%.2f°, %.3f) @ %.1f RPM (queue remaining: %zu)",
-        cmd.target.theta, cmd.target.rho, cmd.feedRate, _commandQueue.count);
+    ESP_LOGD(TAG, "Loading next command: target(%.2f°, %.3f) @ %.1f RPM (queue remaining: %zu)",
+        cmd.target.theta, cmd.target.rho, cmd.feedRate, _commandQueue.getCount());
     planMotion(cmd);
     return true;
 }
@@ -392,10 +291,10 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
     // Target position is already in polar coordinates
     _currentMotion.targetPolar = cmd.target;
 
-    ESP_LOGI(TAG, "Motion planning: current pos(%.2f°, %.3f) → target pos(%.2f°, %.3f)",
+    ESP_LOGD(TAG, "Motion planning: current pos(%.2f°, %.3f) → target pos(%.2f°, %.3f)",
         _currentMotion.startPolar.theta, _currentMotion.startPolar.rho,
         _currentMotion.targetPolar.theta, _currentMotion.targetPolar.rho);
-    ESP_LOGI(TAG, "Current motor positions: theta=%ld steps, rho=%ld steps", _thetaPosition, _rhoPosition);
+    ESP_LOGD(TAG, "Current motor positions: theta=%ld steps, rho=%ld steps", _thetaPosition, _rhoPosition);
 
     // Calculate coupled motor steps accounting for interdependent axes
     int32_t thetaMotorSteps, rhoMotorSteps;
@@ -437,14 +336,14 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
     gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, _currentMotion.thetaStepDir > 0 ? 1 : 0);
     gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, _currentMotion.rhoStepDir > 0 ? 1 : 0);
 
-    ESP_LOGI(TAG, "Direction pins set: theta=%d (dir=%ld), rho=%d (dir=%ld)",
+    ESP_LOGD(TAG, "Direction pins set: theta=%d (dir=%ld), rho=%d (dir=%ld)",
         _currentMotion.thetaStepDir > 0 ? 1 : 0, _currentMotion.thetaStepDir,
         _currentMotion.rhoStepDir > 0 ? 1 : 0, _currentMotion.rhoStepDir);
 
-    ESP_LOGI(TAG, "Coupled motion planned: start(%.2f°,%.3f) → target(%.2f°,%.3f)",
+    ESP_LOGD(TAG, "Coupled motion planned: start(%.2f°,%.3f) → target(%.2f°,%.3f)",
         _currentMotion.startPolar.theta, _currentMotion.startPolar.rho,
         _currentMotion.targetPolar.theta, _currentMotion.targetPolar.rho);
-    ESP_LOGI(TAG, "Bresenham motion steps: theta=%ld, rho=%ld (dirs: %ld, %ld), err=%ld",
+    ESP_LOGD(TAG, "Bresenham motion steps: theta=%ld, rho=%ld (dirs: %ld, %ld), err=%ld",
         _bresenham.thetaSteps, _bresenham.rhoSteps, _bresenham.thetaDir, _bresenham.rhoDir, _bresenham.err);
 
     // Start step generation timer if there's motion to execute
@@ -477,10 +376,7 @@ void PolarRobot::planMotion(const MotionCommand& cmd) {
         };
         gptimer_set_alarm_action(_stepTimer, &alarm_config);
         gptimer_start(_stepTimer);
-
-        // Start debug timer to log motion status every second
-        esp_timer_start_periodic(_debugTimer, 1000000); // 1 second
-        ESP_LOGI(TAG, "Motion started - step interval: %llu us (%.1f steps/sec)", stepInterval, 1000000.0f / stepInterval);
+        ESP_LOGD(TAG, "Motion started - step interval: %llu us (%.1f steps/sec)", stepInterval, 1000000.0f / stepInterval);
     }
 }
 
@@ -565,7 +461,6 @@ esp_err_t PolarRobot::pause(bool pause) {
     _isPaused = pause;
     if (pause) {
         gptimer_stop(_stepTimer);
-        esp_timer_stop(_debugTimer);
         ESP_LOGI(TAG, "Robot paused");
     }
     else {
@@ -577,18 +472,15 @@ esp_err_t PolarRobot::pause(bool pause) {
 esp_err_t PolarRobot::stop() {
     _isPaused = true;
     gptimer_stop(_stepTimer);
-    esp_timer_stop(_debugTimer);
     _currentMotion.clear();
     _bresenham.clear();  // Clear Bresenham scheduler state
-    MotionCommand dummy;
-    while (_commandQueue.pop(dummy)) { /* empty queue */ }
+    _commandQueue.clear();
     setMotorsActive(false);
     return ESP_OK;
 }
 
 esp_err_t PolarRobot::emergencyStop() {
     gptimer_stop(_stepTimer);
-    esp_timer_stop(_debugTimer);
     _currentMotion.clear();
     _bresenham.clear();  // Clear Bresenham scheduler state
     setMotorsActive(false);
@@ -634,20 +526,12 @@ void PolarRobot::deinit() {
         _motorInactivityTimer = nullptr;
     }
 
-    if (_debugTimer) {
-        esp_timer_stop(_debugTimer);
-        esp_timer_delete(_debugTimer);
-        _debugTimer = nullptr;
-    }
-
     setMotorsActive(false);
     deinitHomingHardware();
 
     delete _thetaStepper;
     delete _rhoStepper;
     delete _tmcBus;
-
-    _commandQueue.deinit();
 }
 
 void PolarRobot::stepsToPolar(int32_t thetaSteps, int32_t rhoSteps, PolarPoint& polar) const {
@@ -658,9 +542,9 @@ void PolarRobot::stepsToPolar(int32_t thetaSteps, int32_t rhoSteps, PolarPoint& 
     float rhoCounteractSteps = (float)thetaSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
     polar.rho = stepsToNormalizedRho((float)rhoSteps - rhoCounteractSteps); // Convert to normalized 0-1 range
 
-    ESP_LOGI(TAG, "Steps to polar: theta=%d steps (%.2f°), rho=%d steps (%.3f normalized)",
+    ESP_LOGD(TAG, "Steps to polar: theta=%d steps (%.2f°), rho=%d steps (%.3f normalized)",
         thetaSteps, polar.theta, rhoSteps, polar.rho);
-    ESP_LOGI(TAG, "Calculated polar point: (%.2f°, %.3f)", polar.theta, polar.rho);
+    ESP_LOGD(TAG, "Calculated polar point: (%.2f°, %.3f)", polar.theta, polar.rho);
 }
 
 void PolarRobot::polarToSteps(PolarPoint& polar, int32_t& thetaSteps, int32_t& rhoSteps) const {
@@ -672,7 +556,7 @@ void PolarRobot::polarToSteps(PolarPoint& polar, int32_t& thetaSteps, int32_t& r
 
     rhoSteps = normalizedRhoToSteps(rho); // Convert normalized rho (0-1) to steps
 
-    ESP_LOGI(TAG, "Polar to steps: theta=%.2f° (%.2f rotations) → %d steps, rho=%.3f normalized → %d steps",
+    ESP_LOGD(TAG, "Polar to steps: theta=%.2f° (%.2f rotations) → %d steps, rho=%.3f normalized → %d steps",
         theta, driveGearRotations, thetaSteps, rho, rhoSteps);
 }
 
@@ -688,11 +572,11 @@ void PolarRobot::calculateCoupledMotorSteps(const PolarPoint& startPolar, const 
     float rhoCounteractSteps = thetaMotorSteps / (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f); // Counteract theta influence on rho
     rhoMotorSteps = rhoBase + rhoCounteractSteps;
 
-    ESP_LOGI(TAG, "Coupled motor steps: theta=%d steps, rho=%d steps (rho base: %d + counteract: %.2f)",
+    ESP_LOGD(TAG, "Coupled motor steps: theta=%d steps, rho=%d steps (rho base: %d + counteract: %.2f)",
         thetaMotorSteps, rhoMotorSteps, rhoBase, rhoCounteractSteps);
-    ESP_LOGI(TAG, "Delta polar: (%.2f°, %.3f)", deltaPolar.theta, deltaPolar.rho);
-    ESP_LOGI(TAG, "Target polar: (%.2f°, %.3f)", targetPolar.theta, targetPolar.rho);
-    ESP_LOGI(TAG, "Start polar: (%.2f°, %.3f)", startPolar.theta, startPolar.rho);
+    ESP_LOGD(TAG, "Delta polar: (%.2f°, %.3f)", deltaPolar.theta, deltaPolar.rho);
+    ESP_LOGD(TAG, "Target polar: (%.2f°, %.3f)", targetPolar.theta, targetPolar.rho);
+    ESP_LOGD(TAG, "Start polar: (%.2f°, %.3f)", startPolar.theta, startPolar.rho);
 }
 
 uint64_t PolarRobot::calculateStepInterval() {

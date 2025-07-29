@@ -83,52 +83,62 @@ public:
     static constexpr uint8_t CURRENT_PER_CHANNEL_MA = 20;  // mA per color channel at full brightness
     static constexpr uint32_t SYSTEM_RESERVE_MA = 400;     // Reserve for other components
 
-    explicit PixelDriver(uint32_t update_rate_hz = 60);
-    ~PixelDriver();
+    // Static initialization
+    static void initialize(uint32_t update_rate_hz = 60);
+    static void shutdown();
 
     // Channel management
-    int32_t addChannel(const ChannelConfig& config);
-    bool removeChannel(int32_t channel_id);
-    PixelChannel* getChannel(int32_t channel_id);
-    std::vector<int32_t> getChannelIds() const;
+    static int32_t addChannel(const ChannelConfig& config);
+    static bool removeChannel(int32_t channel_id);
+    static PixelChannel* getChannel(int32_t channel_id);
+    static PixelChannel* getMainChannel();  // Returns the first channel added
+    static std::vector<int32_t> getChannelIds();
 
     // Global settings
-    void setCurrentLimit(int32_t limit_ma);  // -1 for unlimited
-    int32_t getCurrentLimit() const { return current_limit_ma_; }
+    static void setCurrentLimit(int32_t limit_ma);  // -1 for unlimited
+    static int32_t getCurrentLimit();
 
-    void setUpdateRate(uint32_t rate_hz);
-    uint32_t getUpdateRate() const { return update_rate_hz_; }
+    static void setUpdateRate(uint32_t rate_hz);
+    static uint32_t getUpdateRate();
 
     // Control
-    void start();
-    void stop();
-    bool isRunning() const { return running_; }
+    static void start();
+    static void stop();
+    static bool isRunning();
 
     // Global effects
-    void setAllChannelsEffect(PixelEffect effect);
-    void setAllChannelsColor(const PixelColor& color);
-    void setAllChannelsBrightness(uint8_t brightness);
-    void setAllChannelsEnabled(bool enabled);
+    static void setAllChannelsEffect(PixelEffect effect);
+    static void setAllChannelsColor(const PixelColor& color);
+    static void setAllChannelsBrightness(uint8_t brightness);
+    static void setAllChannelsEnabled(bool enabled);
 
     // Statistics
-    uint32_t getTotalCurrentConsumption() const;
-    uint32_t getScaledCurrentConsumption() const;
-    float getCurrentScaleFactor() const;
+    static uint32_t getTotalCurrentConsumption();
+    static uint32_t getScaledCurrentConsumption();
+    static float getCurrentScaleFactor();
 
 private:
-    void driverTask();
+    // Prevent instantiation
+    PixelDriver() = delete;
+    ~PixelDriver() = delete;
+    PixelDriver(const PixelDriver&) = delete;
+    PixelDriver& operator=(const PixelDriver&) = delete;
+
+    static void driverTask();
     static void driverTaskWrapper(void* param);
-    void updateChannels();
-    void applyCurrentLimiting();
+    static void updateChannels();
+    static void applyCurrentLimiting();
 
-    std::vector<std::unique_ptr<PixelChannel>> channels_;
-    std::unique_ptr<PixelEffectEngine> effect_engine_;
+    static std::vector<std::unique_ptr<PixelChannel>> channels_;
+    static std::unique_ptr<PixelEffectEngine> effect_engine_;
+    static int32_t main_channel_id_;
 
-    TaskHandle_t task_handle_ = nullptr;
-    int32_t current_limit_ma_ = -1;
-    uint32_t update_rate_hz_;
-    bool running_ = false;
-    int32_t next_channel_id_ = 0;
+    static TaskHandle_t task_handle_;
+    static int32_t current_limit_ma_;
+    static uint32_t update_rate_hz_;
+    static bool running_;
+    static int32_t next_channel_id_;
+    static bool initialized_;
 };
 
 class PixelChannel {

@@ -12,15 +12,14 @@
 #include "kd_common.h"
 #include "kd_ntp.h"
 #include "api.h"
-#include "sd.h"
 
 #include "stusb4500.h"
 #include "kd_pixdriver.h"
 #include "RobotMotionAPI.h"
+#include "ManifestManager.h"
 
 static const char* TAG = "main";
 
-PixelDriver pixelDriver(60); // 60 Hz update rate
 STUSB4500 stusb;
 
 void init_stusb() {
@@ -70,7 +69,6 @@ extern "C" void app_main(void)
     //event loop
     esp_event_loop_create_default();
 
-    init_sd();
     init_stusb();
 
     //use protocomm security version 0
@@ -80,36 +78,21 @@ extern "C" void app_main(void)
     //api_init();
     KdNTP::init();
 
-    /*
-    pixelDriver.addChannel(ChannelConfig((gpio_num_t)18, 144, PixelFormat::RGBW));
-    pixelDriver.setCurrentLimit(2000); // Set current limit to 2A
-    pixelDriver.start();
+    ManifestManager::initialize();
 
-    pixelDriver.getChannel(0)->setEffect(EffectConfig{
+    PixelDriver::initialize(60); // 60Hz update rate
+    PixelDriver::addChannel(ChannelConfig((gpio_num_t)18, 144, PixelFormat::RGBW));
+    PixelDriver::setCurrentLimit(2000); // Set current limit to 2A
+    PixelDriver::start();
+
+    PixelDriver::getMainChannel()->setEffect(EffectConfig{
         .effect = PixelEffect::RAINBOW,
-        .color = {255, 0, 0, 0}, // Red
-        .brightness = 128,
+        .color = {0, 255, 0, 0}, // Green
+        .brightness = 255,
         .speed = 50,
         .enabled = true,
         });
-    */
 
     RobotMotionSystem::init();
     RobotMotionSystem::homeAllAxes();
-
-    while (!RobotMotionSystem::isHomed()) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
-    ESP_LOGI(TAG, "Robot homing complete, calibration: Theta: %d steps / rot, Rho: %d steps max",
-        RobotMotionSystem::getRobot()->getStepsPerThetaRotation(),
-        RobotMotionSystem::getRobot()->getRhoMaxSteps());
-
-    RobotMotionSystem::moveToPolar(0, 0.5, 15);
-    RobotMotionSystem::moveToPolar(90, 0.8, 15);
-    RobotMotionSystem::moveToPolar(180, 0.3, 15);
-    RobotMotionSystem::moveToPolar(270, 0.8, 15);
-    RobotMotionSystem::moveToPolar(0, 0, 15);
-
-    ESP_LOGI(TAG, "Robot homing complete");
 }

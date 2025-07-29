@@ -6,6 +6,7 @@
 
 #include "tmc2209.h"
 #include "uartbus.h"
+#include "MotionQueue.h"
 
 #include "driver/gpio.h"
 #include "driver/gptimer.h"
@@ -15,20 +16,6 @@
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include <cmath>
-
-// Polar coordinates
-struct PolarPoint {
-    float theta;  // Angle in degrees
-    float rho;    // Normalized radius (0.0 = center, 1.0 = maximum)
-};
-
-// Motion command
-struct MotionCommand {
-    PolarPoint target;
-    float feedRate;     // RPM
-    bool isRelative;
-    uint32_t commandId;
-};
 
 // Motor status
 struct MotorStatus {
@@ -64,17 +51,12 @@ public:
         THETA_BACKING_OFF,
         THETA_SEEKING_FIRST_EDGE,
         THETA_SEEKING_SECOND_EDGE,
-        // Legacy states for backwards compatibility
-        THETA_SEEKING,
-        RHO_SEEKING,
         COMPLETE,
         ERROR
     };
 
     enum class HomingAxis {
         NONE,
-        THETA_ONLY,
-        RHO_ONLY,
         SEQUENTIAL_THETA,  // First phase of sequential homing
         SEQUENTIAL_RHO     // Second phase of sequential homing
     };
@@ -100,7 +82,7 @@ public:
 
     // Status
     RobotStatus getStatus();
-    bool isReady() { return _isHomed && !_isPaused && _commandQueue.count < _maxQueueSize; }
+    bool isReady() { return _isHomed && !_isPaused && _commandQueue.getCount() < _commandQueue.getSize(); }
     bool areMotorsActive() const { return _motorsActive; }
     bool isHoming() const { return _homingControl.homingActive; }
     HomingState getHomingState() const { return _homingControl.state; }
@@ -138,22 +120,9 @@ private:
     // Motor activity tracking for enable pin management
     volatile bool _motorsActive;
     esp_timer_handle_t _motorInactivityTimer;
-    esp_timer_handle_t _debugTimer;
 
     // Motion queue and execution
-    struct MotionQueue {
-        MotionCommand* buffer;
-        size_t head, tail, count, size;
-        SemaphoreHandle_t mutex;
-
-        MotionQueue() : buffer(nullptr), head(0), tail(0), count(0), size(0), mutex(nullptr) {}
-        bool init(size_t queueSize);
-        void deinit();
-        bool push(const MotionCommand& cmd);
-        bool pop(MotionCommand& cmd);
-        bool peekLast(MotionCommand& cmd) const;
-        size_t available() const { return size - count; }
-    } _commandQueue;
+    MotionQueue _commandQueue;
 
     size_t _maxQueueSize;
 
@@ -243,17 +212,16 @@ private:
     uint64_t calculateStepInterval();
 
     // Step generation (using ESP32-S3 timer)
-    static bool IRAM_ATTR stepTimerCallback(gptimer_handle_t timer, const gptimer_alarm_event_data_t* edata, void* user_ctx);
-    void IRAM_ATTR generateSteps();
-    void IRAM_ATTR generateHomingSteps();
+    static bool stepTimerCallback(gptimer_handle_t timer, const gptimer_alarm_event_data_t* edata, void* user_ctx);
+    void generateSteps();
+    void generateHomingSteps();
 
-    void IRAM_ATTR startRhoMaxHomingISR(); // ISR-safe version for rho max calibration
-    void IRAM_ATTR startRhoMinHomingISR(); // ISR-safe version for rho min calibration
-    void IRAM_ATTR startThetaHomingISR(); // ISR-safe version for timer callbacks
-    void IRAM_ATTR startThetaCalibrationISR(); // ISR-safe version for theta calibration
+    void startRhoMaxHomingISR(); // ISR-safe version for rho max calibration
+    void startRhoMinHomingISR(); // ISR-safe version for rho min calibration
+    void startThetaCalibrationISR(); // ISR-safe version for theta calibration
 
-    static void IRAM_ATTR rhoStallCallback(uint8_t addr, bool stalled);
-    static void IRAM_ATTR endstopPinISR(void* arg);
+    static void rhoStallCallback(uint8_t addr, bool stalled);
+    static void endstopPinISR(void* arg);
 
     // Endstop reading
     bool readThetaEndstop();

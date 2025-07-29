@@ -154,36 +154,6 @@ void IRAM_ATTR PolarRobot::startThetaCalibrationISR() {
     gptimer_start(_stepTimer);
 }
 
-// ISR-safe version of theta homing start (called from timer interrupt)
-void IRAM_ATTR PolarRobot::startThetaHomingISR() {
-    const float microstepMultiplier = 16.0f;
-    _homingControl.maxSteps = (CONFIG_ROBOT_THETA_STEPS_PER_ROT * CONFIG_ROBOT_THETA_GEAR_RATIO * 2) * microstepMultiplier;
-    _homingControl.stepCount = 0;
-    _homingControl.thetaStepCounter = 0; // Reset theta step counter for coupled motion
-
-    _thetaEndstopTriggered = false;
-
-    // Check if already on endstop - if so, back off first
-    if (readThetaEndstop()) {
-        _homingControl.state = HomingState::THETA_BACKING_OFF;
-        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, 0);
-        gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, 0);  // Rho moves in same direction
-    }
-    else {
-        _homingControl.state = HomingState::THETA_SEEKING;
-        gpio_set_level((gpio_num_t)CONFIG_ROBOT_THETA_DIR_PIN, 1);
-        gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_DIR_PIN, 1);  // Rho moves in same direction
-    }
-
-    uint64_t homingStepInterval = 1000;
-    gptimer_alarm_config_t alarm_config = {
-        .alarm_count = homingStepInterval,
-        .flags = {.auto_reload_on_alarm = true}
-    };
-    gptimer_set_alarm_action(_stepTimer, &alarm_config);
-    gptimer_start(_stepTimer);
-}
-
 // =============================================================================
 // HOMING STEP GENERATION WITH INTEGRATED STATE MACHINE
 // =============================================================================
@@ -293,7 +263,6 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
     // Generate steps based on current state
     switch (_homingControl.state) {
     case HomingState::THETA_BACKING_OFF:
-    case HomingState::THETA_SEEKING:
     case HomingState::THETA_SEEKING_FIRST_EDGE:
     case HomingState::THETA_SEEKING_SECOND_EDGE: {
         // Generate theta step
@@ -338,7 +307,6 @@ void IRAM_ATTR PolarRobot::generateHomingSteps() {
         break;
     }
 
-    case HomingState::RHO_SEEKING:
     case HomingState::RHO_SEEKING_MIN: {
         // Generate rho step (moving towards center/minimum)
         gpio_set_level((gpio_num_t)CONFIG_ROBOT_RHO_STEP_PIN, 1);

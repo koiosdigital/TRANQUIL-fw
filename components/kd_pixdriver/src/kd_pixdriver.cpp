@@ -12,6 +12,17 @@
 static const char* TAG = "kd_pixdriver";
 static const char* NVS_NAMESPACE = "pixdriver";
 
+// Static member definitions
+std::vector<std::unique_ptr<PixelChannel>> PixelDriver::channels_;
+std::unique_ptr<PixelEffectEngine> PixelDriver::effect_engine_;
+int32_t PixelDriver::main_channel_id_ = -1;
+TaskHandle_t PixelDriver::task_handle_ = nullptr;
+int32_t PixelDriver::current_limit_ma_ = -1;
+uint32_t PixelDriver::update_rate_hz_ = 60;
+bool PixelDriver::running_ = false;
+int32_t PixelDriver::next_channel_id_ = 0;
+bool PixelDriver::initialized_ = false;
+
 // I2S callback function
 extern "C" IRAM_ATTR bool i2s_tx_callback(i2s_chan_handle_t handle, i2s_event_data_t* event, void* user_ctx) {
     PixelChannel* channel = static_cast<PixelChannel*>(user_ctx);
@@ -67,18 +78,33 @@ PixelColor PixelColor::scale(uint8_t brightness) const {
 }
 
 // PixelDriver implementation
-PixelDriver::PixelDriver(uint32_t update_rate_hz)
-    : update_rate_hz_(update_rate_hz) {
+void PixelDriver::initialize(uint32_t update_rate_hz) {
+    if (initialized_) return;
+
+    update_rate_hz_ = update_rate_hz;
     effect_engine_ = std::make_unique<PixelEffectEngine>(update_rate_hz);
+    initialized_ = true;
     ESP_LOGI(TAG, "PixelDriver initialized with %lu Hz update rate", update_rate_hz);
 }
 
-PixelDriver::~PixelDriver() {
+void PixelDriver::shutdown() {
+    if (!initialized_) return;
+
     stop();
     channels_.clear();
+    effect_engine_.reset();
+    main_channel_id_ = -1;
+    next_channel_id_ = 0;
+    initialized_ = false;
+    ESP_LOGI(TAG, "PixelDriver shutdown");
 }
 
 int32_t PixelDriver::addChannel(const ChannelConfig& config) {
+    if (!initialized_) {
+        ESP_LOGE(TAG, "PixelDriver not initialized");
+        return -1;
+    }
+
     int32_t id = next_channel_id_++;
     auto channel = std::make_unique<PixelChannel>(id, config);
 
@@ -89,6 +115,12 @@ int32_t PixelDriver::addChannel(const ChannelConfig& config) {
 
     // Load persisted configuration
     channel->loadFromNVS();
+
+    // Track the first channel as main channel
+    if (main_channel_id_ == -1) {
+        main_channel_id_ = id;
+        ESP_LOGI(TAG, "Set channel %ld as main channel", id);
+    }
 
     channels_.emplace_back(std::move(channel));
 
@@ -106,6 +138,19 @@ bool PixelDriver::removeChannel(int32_t channel_id) {
         });
 
     if (it != channels_.end()) {
+        // If removing the main channel, update main channel ID
+        if (main_channel_id_ == channel_id) {
+            main_channel_id_ = -1;
+            // Find the next available channel to be main
+            for (const auto& channel : channels_) {
+                if (channel->getId() != channel_id) {
+                    main_channel_id_ = channel->getId();
+                    ESP_LOGI(TAG, "Set channel %ld as new main channel", main_channel_id_);
+                    break;
+                }
+            }
+        }
+
         channels_.erase(it);
         ESP_LOGI(TAG, "Removed channel %ld", channel_id);
         return true;
@@ -123,7 +168,12 @@ PixelChannel* PixelDriver::getChannel(int32_t channel_id) {
     return (it != channels_.end()) ? it->get() : nullptr;
 }
 
-std::vector<int32_t> PixelDriver::getChannelIds() const {
+PixelChannel* PixelDriver::getMainChannel() {
+    if (main_channel_id_ == -1) return nullptr;
+    return getChannel(main_channel_id_);
+}
+
+std::vector<int32_t> PixelDriver::getChannelIds() {
     std::vector<int32_t> ids;
     ids.reserve(channels_.size());
 
@@ -139,16 +189,24 @@ void PixelDriver::setCurrentLimit(int32_t limit_ma) {
     ESP_LOGI(TAG, "Current limit set to %ld mA", limit_ma);
 }
 
+int32_t PixelDriver::getCurrentLimit() {
+    return current_limit_ma_;
+}
+
 void PixelDriver::setUpdateRate(uint32_t rate_hz) {
     update_rate_hz_ = rate_hz;
     effect_engine_ = std::make_unique<PixelEffectEngine>(rate_hz);
 }
 
+uint32_t PixelDriver::getUpdateRate() {
+    return update_rate_hz_;
+}
+
 void PixelDriver::start() {
-    if (running_) return;
+    if (running_ || !initialized_) return;
 
     running_ = true;
-    xTaskCreate(driverTaskWrapper, "pixdriver", 4096, this, 5, &task_handle_);
+    xTaskCreate(driverTaskWrapper, "pixdriver", 4096, nullptr, 5, &task_handle_);
     ESP_LOGI(TAG, "PixelDriver started");
 }
 
@@ -161,6 +219,10 @@ void PixelDriver::stop() {
         task_handle_ = nullptr;
     }
     ESP_LOGI(TAG, "PixelDriver stopped");
+}
+
+bool PixelDriver::isRunning() {
+    return running_;
 }
 
 void PixelDriver::setAllChannelsEffect(PixelEffect effect) {
@@ -189,7 +251,7 @@ void PixelDriver::setAllChannelsEnabled(bool enabled) {
     }
 }
 
-uint32_t PixelDriver::getTotalCurrentConsumption() const {
+uint32_t PixelDriver::getTotalCurrentConsumption() {
     uint32_t total = 0;
     for (const auto& channel : channels_) {
         total += channel->getCurrentConsumption();
@@ -197,12 +259,12 @@ uint32_t PixelDriver::getTotalCurrentConsumption() const {
     return total;
 }
 
-uint32_t PixelDriver::getScaledCurrentConsumption() const {
+uint32_t PixelDriver::getScaledCurrentConsumption() {
     float scale = getCurrentScaleFactor();
     return static_cast<uint32_t>(getTotalCurrentConsumption() * scale);
 }
 
-float PixelDriver::getCurrentScaleFactor() const {
+float PixelDriver::getCurrentScaleFactor() {
     if (current_limit_ma_ <= 0) return 1.0f;
 
     uint32_t total_current = getTotalCurrentConsumption();
@@ -216,7 +278,7 @@ float PixelDriver::getCurrentScaleFactor() const {
 }
 
 void PixelDriver::driverTaskWrapper(void* param) {
-    static_cast<PixelDriver*>(param)->driverTask();
+    driverTask();
 }
 
 void PixelDriver::driverTask() {

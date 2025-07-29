@@ -42,49 +42,54 @@ private:
     static const char* MANIFEST_PATH;
     static const char* TAG;
 
-    cJSON* manifest_json;
-    cJSON* patterns_array;
-    cJSON* playlists_array;
+    static cJSON* manifest_json;
+    static cJSON* patterns_array;
+    static cJSON* playlists_array;
+    static bool initialized_;
+
+    // Prevent instantiation
+    ManifestManager() = delete;
+    ~ManifestManager() = delete;
+    ManifestManager(const ManifestManager&) = delete;
+    ManifestManager& operator=(const ManifestManager&) = delete;
 
     // Helper functions
-    esp_err_t loadManifest();
-    esp_err_t saveManifest();
-    esp_err_t createEmptyManifest();
-    cJSON* patternToJson(const Pattern& pattern);
-    cJSON* playlistToJson(const Playlist& playlist);
-    Pattern jsonToPattern(const cJSON* json);
-    Playlist jsonToPlaylist(const cJSON* json);
-    std::string generateUUID();
+    static esp_err_t loadManifest();
+    static esp_err_t saveManifest();
+    static esp_err_t createEmptyManifest();
+    static cJSON* patternToJson(const Pattern& pattern);
+    static cJSON* playlistToJson(const Playlist& playlist);
+    static Pattern jsonToPattern(const cJSON* json);
+    static Playlist jsonToPlaylist(const cJSON* json);
+    static std::string generateUUID();
 
 public:
-    ManifestManager();
-    ~ManifestManager();
-
-    // Initialization
-    esp_err_t init();
+    // Static initialization - calls sd_init and initializes manifest
+    static esp_err_t initialize();
+    static void shutdown();
 
     // Pattern CRUD operations
-    esp_err_t addPattern(const Pattern& pattern);
-    esp_err_t updatePattern(const std::string& uuid, const Pattern& pattern);
-    esp_err_t deletePattern(const std::string& uuid);
-    std::vector<Pattern> getAllPatterns();
-    Pattern* getPattern(const std::string& uuid);
-    bool patternExists(const std::string& uuid);
+    static esp_err_t addPattern(const Pattern& pattern);
+    static esp_err_t updatePattern(const std::string& uuid, const Pattern& pattern);
+    static esp_err_t deletePattern(const std::string& uuid);
+    static std::vector<Pattern> getAllPatterns();
+    static Pattern* getPattern(const std::string& uuid);
+    static bool patternExists(const std::string& uuid);
 
     // Playlist CRUD operations
-    esp_err_t addPlaylist(const Playlist& playlist);
-    esp_err_t updatePlaylist(const std::string& uuid, const Playlist& playlist);
-    esp_err_t deletePlaylist(const std::string& uuid);
-    std::vector<Playlist> getAllPlaylists();
-    Playlist* getPlaylist(const std::string& uuid);
-    bool playlistExists(const std::string& uuid);
+    static esp_err_t addPlaylist(const Playlist& playlist);
+    static esp_err_t updatePlaylist(const std::string& uuid, const Playlist& playlist);
+    static esp_err_t deletePlaylist(const std::string& uuid);
+    static std::vector<Playlist> getAllPlaylists();
+    static Playlist* getPlaylist(const std::string& uuid);
+    static bool playlistExists(const std::string& uuid);
 
     // Utility functions
-    esp_err_t addPatternToPlaylist(const std::string& playlistUuid, const std::string& patternUuid);
-    esp_err_t removePatternFromPlaylist(const std::string& playlistUuid, const std::string& patternUuid);
-    esp_err_t setFeaturedPattern(const std::string& playlistUuid, const std::string& patternUuid);
+    static esp_err_t addPatternToPlaylist(const std::string& playlistUuid, const std::string& patternUuid);
+    static esp_err_t removePatternFromPlaylist(const std::string& playlistUuid, const std::string& patternUuid);
+    static esp_err_t setFeaturedPattern(const std::string& playlistUuid, const std::string& patternUuid);
 
     // Statistics
-    size_t getPatternCount();
-    size_t getPlaylistCount();
+    static size_t getPatternCount();
+    static size_t getPlaylistCount();
 };

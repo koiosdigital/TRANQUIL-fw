@@ -8,21 +8,18 @@
 #include <time.h>
 #include <algorithm>
 
+// Static member definitions
 const char* ManifestManager::MANIFEST_PATH = "/sd/manifest.json";
 const char* ManifestManager::TAG = "ManifestManager";
+cJSON* ManifestManager::manifest_json = nullptr;
+cJSON* ManifestManager::patterns_array = nullptr;
+cJSON* ManifestManager::playlists_array = nullptr;
+bool ManifestManager::initialized_ = false;
 
-ManifestManager::ManifestManager()
-    : manifest_json(nullptr), patterns_array(nullptr), playlists_array(nullptr) {
-}
+esp_err_t ManifestManager::initialize() {
+    if (initialized_) return ESP_OK;
 
-ManifestManager::~ManifestManager() {
-    if (manifest_json) {
-        cJSON_Delete(manifest_json);
-    }
-}
-
-esp_err_t ManifestManager::init() {
-    ESP_LOGI(TAG, "Initializing ManifestManager");
+    init_sd();
 
     //delete existing manifest if it exists
     if (remove(MANIFEST_PATH) != 0) {
@@ -45,8 +42,23 @@ esp_err_t ManifestManager::init() {
         }
     }
 
-    ESP_LOGI(TAG, "ManifestManager initialized successfully");
+    initialized_ = true;
+    ESP_LOGI(TAG, "initialized successfully");
     return ESP_OK;
+}
+
+void ManifestManager::shutdown() {
+    if (!initialized_) return;
+
+    if (manifest_json) {
+        cJSON_Delete(manifest_json);
+        manifest_json = nullptr;
+        patterns_array = nullptr;
+        playlists_array = nullptr;
+    }
+
+    initialized_ = false;
+    ESP_LOGI(TAG, "ManifestManager shutdown");
 }
 
 esp_err_t ManifestManager::loadManifest() {
@@ -268,6 +280,11 @@ Playlist ManifestManager::jsonToPlaylist(const cJSON* json) {
 
 // Pattern CRUD operations
 esp_err_t ManifestManager::addPattern(const Pattern& pattern) {
+    if (!initialized_) {
+        ESP_LOGE(TAG, "ManifestManager not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!patterns_array) {
         ESP_LOGE(TAG, "Patterns array not initialized");
         return ESP_ERR_INVALID_STATE;
@@ -367,8 +384,8 @@ esp_err_t ManifestManager::deletePattern(const std::string& uuid) {
 std::vector<Pattern> ManifestManager::getAllPatterns() {
     std::vector<Pattern> patterns;
 
-    if (!patterns_array) {
-        ESP_LOGW(TAG, "Patterns array not initialized");
+    if (!initialized_ || !patterns_array) {
+        ESP_LOGW(TAG, "ManifestManager not initialized");
         return patterns;
     }
 

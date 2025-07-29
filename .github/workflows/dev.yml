@@ -51,7 +51,7 @@ jobs:
       - name: idf build
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.5.0
+          esp_idf_version: v5.5
           extra_docker_args: -v ./output:/output
           target: ${{ env.IDF_TARGET }}
           command: |

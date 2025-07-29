@@ -276,7 +276,6 @@ void IRAM_ATTR TMC2209Stepper::stallguard_isr_handler(void* a) {
 }
 
 void TMC2209Stepper::handle_stallguard_interrupt() {
-    ESP_EARLY_LOGI(TAG, "Stallguard interrupt on addr %u", _addr);
     if (_callback) {
         bool s = gpio_get_level(_diag_pin) == 1;
         _callback(_addr, s);
