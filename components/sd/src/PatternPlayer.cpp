@@ -14,6 +14,7 @@ const char* PatternPlayer::PATTERNS_PATH = "/sd/patterns";
 bool PatternPlayer::initialized_ = false;
 TaskHandle_t PatternPlayer::service_task_handle_ = nullptr;
 SemaphoreHandle_t PatternPlayer::state_mutex_ = nullptr;
+SemaphoreHandle_t PatternPlayer::file_mutex_ = nullptr;
 
 PlaybackState PatternPlayer::playback_state_ = PlaybackState::STOPPED;
 char PatternPlayer::current_pattern_uuid_[MAX_PATTERN_UUID_LEN] = { 0 };
@@ -34,16 +35,20 @@ esp_err_t PatternPlayer::initialize() {
 
     // Create mutex for thread safety
     state_mutex_ = xSemaphoreCreateMutex();
-    if (!state_mutex_) {
-        ESP_LOGE(TAG, "Failed to create state mutex");
+    file_mutex_ = xSemaphoreCreateMutex(); // Create file mutex
+    if (!state_mutex_ || !file_mutex_) {
+        ESP_LOGE(TAG, "Failed to create mutexes");
+        if (state_mutex_) vSemaphoreDelete(state_mutex_);
+        if (file_mutex_) vSemaphoreDelete(file_mutex_);
         return ESP_ERR_NO_MEM;
     }
 
     // Create service task
-    if (xTaskCreate(serviceTaskWrapper, "pattern_player", SERVICE_TASK_STACK_SIZE,
+    if (xTaskCreate(serviceTaskWrapper, "pattern_player", 8192,
         nullptr, SERVICE_TASK_PRIORITY, &service_task_handle_) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create service task");
         vSemaphoreDelete(state_mutex_);
+        vSemaphoreDelete(file_mutex_);
         return ESP_ERR_NO_MEM;
     }
 
@@ -66,10 +71,14 @@ void PatternPlayer::shutdown() {
         service_task_handle_ = nullptr;
     }
 
-    // Clean up mutex
+    // Clean up mutexes
     if (state_mutex_) {
         vSemaphoreDelete(state_mutex_);
         state_mutex_ = nullptr;
+    }
+    if (file_mutex_) {
+        vSemaphoreDelete(file_mutex_);
+        file_mutex_ = nullptr;
     }
 
     // Unload any loaded pattern
@@ -198,6 +207,12 @@ PlaybackState PatternPlayer::getPlaybackState() {
 
 PatternLine PatternPlayer::peekNextLine() {
     if (!file_loaded_ || !pattern_file_) return PatternLine();
+
+    if (xSemaphoreTake(file_mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire file mutex in peekNextLine");
+        return PatternLine();
+    }
+
     long prev_pos = ftell(pattern_file_);
     char line_buffer[MAX_LINE_BUFFER_SIZE];
     size_t line_num = 0;
@@ -207,9 +222,12 @@ PatternLine PatternPlayer::peekNextLine() {
     }
     if (!fgets(line_buffer, sizeof(line_buffer), pattern_file_)) {
         fseek(pattern_file_, prev_pos, SEEK_SET);
+        xSemaphoreGive(file_mutex_);
         return PatternLine();
     }
     fseek(pattern_file_, prev_pos, SEEK_SET);
+    xSemaphoreGive(file_mutex_);
+
     // Remove newline
     size_t len = strlen(line_buffer);
     while (len > 0 && (line_buffer[len - 1] == '\n' || line_buffer[len - 1] == '\r')) {
@@ -231,12 +249,18 @@ bool PatternPlayer::hasMoreLines() {
 }
 
 esp_err_t PatternPlayer::loadPatternFile(const char* pattern_uuid) {
+    if (xSemaphoreTake(file_mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire file mutex in loadPatternFile");
+        return ESP_ERR_TIMEOUT;
+    }
+
     unloadPatternFile();
     char file_path[256];
     getPatternFilePath(pattern_uuid, file_path, sizeof(file_path));
     pattern_file_ = fopen(file_path, "r");
     if (!pattern_file_) {
         ESP_LOGE(TAG, "Failed to open pattern file: %s", file_path);
+        xSemaphoreGive(file_mutex_);
         return ESP_ERR_NOT_FOUND;
     }
     // Count total lines
@@ -249,10 +273,17 @@ esp_err_t PatternPlayer::loadPatternFile(const char* pattern_uuid) {
     current_line_index_ = 0;
     file_loaded_ = true;
     ESP_LOGI(TAG, "Loaded pattern file: %s (%zu lines)", file_path, total_lines_);
+
+    xSemaphoreGive(file_mutex_);
     return ESP_OK;
 }
 
 void PatternPlayer::unloadPatternFile() {
+    if (xSemaphoreTake(file_mutex_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to acquire file mutex in unloadPatternFile");
+        return;
+    }
+
     if (pattern_file_) {
         fclose(pattern_file_);
         pattern_file_ = nullptr;
@@ -260,6 +291,8 @@ void PatternPlayer::unloadPatternFile() {
     current_line_index_ = 0;
     total_lines_ = 0;
     file_loaded_ = false;
+
+    xSemaphoreGive(file_mutex_);
 }
 
 void PatternPlayer::getPatternFilePath(const char* pattern_uuid, char* file_path, size_t file_path_size) {

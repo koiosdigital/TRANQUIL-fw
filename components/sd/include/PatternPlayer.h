@@ -9,8 +9,7 @@
 #include <stdbool.h>
 
 #define MAX_PATTERN_UUID_LEN 64
-#define MAX_PATTERN_LINES 10000
-#define MAX_LINE_BUFFER_SIZE 256
+#define MAX_LINE_BUFFER_SIZE 512
 
 // Pattern line structure for theta-rho lines
 struct PatternLine {
@@ -123,6 +122,7 @@ private:
     static bool initialized_;
     static TaskHandle_t service_task_handle_;
     static SemaphoreHandle_t state_mutex_;
+    static SemaphoreHandle_t file_mutex_; // Add file_mutex_ as a static member of PatternPlayer
 
     // Playback state
     static PlaybackState playback_state_;
