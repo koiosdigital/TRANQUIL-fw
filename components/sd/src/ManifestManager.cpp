@@ -369,6 +369,30 @@ esp_err_t ManifestManager::deletePattern(const std::string& uuid) {
         return ESP_ERR_INVALID_STATE;
     }
 
+    //Remove pattern from all playlists it is in
+    int playlist_size = cJSON_GetArraySize(playlists_array);
+    for (int i = 0; i < playlist_size; i++) {
+        cJSON* playlist_item = cJSON_GetArrayItem(playlists_array, i);
+        cJSON* patterns = cJSON_GetObjectItem(playlist_item, "patterns");
+        if (cJSON_IsArray(patterns)) {
+            int patterns_count = cJSON_GetArraySize(patterns);
+            for (int j = 0; j < patterns_count; j++) {
+                cJSON* pattern_item = cJSON_GetArrayItem(patterns, j);
+                if (cJSON_IsString(pattern_item) && strcmp(pattern_item->valuestring, uuid.c_str()) == 0) {
+                    // Remove pattern from playlist
+                    cJSON_DeleteItemFromArray(patterns, j);
+                    ESP_LOGI(TAG, "Removed pattern %s from playlist %s", uuid.c_str(), cJSON_GetObjectItem(playlist_item, "uuid")->valuestring);
+                    // Save manifest after each removal
+                    esp_err_t ret = saveManifest();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to save manifest after removing pattern from playlist");
+                        return ret;
+                    }
+                }
+            }
+        }
+    }
+
     // Find and delete pattern
     int size = cJSON_GetArraySize(patterns_array);
     for (int i = 0; i < size; i++) {
@@ -387,6 +411,13 @@ esp_err_t ManifestManager::deletePattern(const std::string& uuid) {
             ESP_LOGI(TAG, "Pattern deleted: %s", uuid.c_str());
             return ESP_OK;
         }
+    }
+
+    //Delete pattern file from filesystem
+    std::string pattern_file_path = "/sd/patterns/" + uuid + ".thr";
+    if (remove(pattern_file_path.c_str()) != 0) {
+        ESP_LOGE(TAG, "Failed to delete pattern file: %s (%d)", pattern_file_path.c_str(), errno);
+        return ESP_ERR_INVALID_STATE;
     }
 
     ESP_LOGW(TAG, "Pattern not found: %s", uuid.c_str());
@@ -633,6 +664,36 @@ esp_err_t ManifestManager::setFeaturedPattern(const std::string& playlistUuid, c
 
     playlist->featured_pattern = patternUuid;
     return updatePlaylist(playlistUuid, *playlist);
+}
+
+bool ManifestManager::reorderPlaylist(const std::string& playlistUuid, const std::vector<std::string>& newOrder) {
+    Playlist* playlist = getPlaylist(playlistUuid);
+    if (!playlist) {
+        ESP_LOGW(TAG, "Playlist not found: %s", playlistUuid.c_str());
+        return false;
+    }
+    // Validate all UUIDs exist in the playlist
+    for (const auto& uuid : newOrder) {
+        if (std::find(playlist->patterns.begin(), playlist->patterns.end(), uuid) == playlist->patterns.end()) {
+            ESP_LOGW(TAG, "Pattern %s not found in playlist %s", uuid.c_str(), playlistUuid.c_str());
+            return false;
+        }
+    }
+    // Validate no duplicates and same size
+    if (newOrder.size() != playlist->patterns.size()) {
+        ESP_LOGW(TAG, "Reorder array size mismatch for playlist %s", playlistUuid.c_str());
+        return false;
+    }
+    std::vector<std::string> sorted_old = playlist->patterns;
+    std::vector<std::string> sorted_new = newOrder;
+    std::sort(sorted_old.begin(), sorted_old.end());
+    std::sort(sorted_new.begin(), sorted_new.end());
+    if (sorted_old != sorted_new) {
+        ESP_LOGW(TAG, "Reorder array does not match playlist contents for %s", playlistUuid.c_str());
+        return false;
+    }
+    playlist->patterns = newOrder;
+    return updatePlaylist(playlistUuid, *playlist) == ESP_OK;
 }
 
 // Statistics

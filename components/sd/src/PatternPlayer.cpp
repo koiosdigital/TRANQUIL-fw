@@ -48,14 +48,14 @@ esp_err_t PatternPlayer::initialize() {
     }
 
     initialized_ = true;
-    ESP_LOGI(TAG, "PatternPlayer initialized successfully");
+    ESP_LOGD(TAG, "PatternPlayer initialized successfully");
     return ESP_OK;
 }
 
 void PatternPlayer::shutdown() {
     if (!initialized_) return;
 
-    ESP_LOGI(TAG, "Shutting down PatternPlayer");
+    ESP_LOGD(TAG, "Shutting down PatternPlayer");
 
     // Stop playback
     stop();
@@ -76,7 +76,7 @@ void PatternPlayer::shutdown() {
     unloadPatternFile();
 
     initialized_ = false;
-    ESP_LOGI(TAG, "PatternPlayer shutdown complete");
+    ESP_LOGD(TAG, "PatternPlayer shutdown complete");
 }
 
 esp_err_t PatternPlayer::playPattern(const char* pattern_uuid) {
@@ -84,7 +84,7 @@ esp_err_t PatternPlayer::playPattern(const char* pattern_uuid) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (!RobotMotionSystem::isHomed() || RobotMotionSystem::isPaused()) {
+    if (!RobotMotionSystem::isHomed()) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -117,7 +117,10 @@ esp_err_t PatternPlayer::playPattern(const char* pattern_uuid) {
 
     strncpy(current_pattern_uuid_, pattern_uuid, MAX_PATTERN_UUID_LEN - 1);
     current_pattern_uuid_[MAX_PATTERN_UUID_LEN - 1] = '\0';
+
+    RobotMotionSystem::stopMotion(); // Ensure robot is stopped before starting playback
     playback_state_ = PlaybackState::PLAYING;
+    RobotMotionSystem::pauseMotion(false); // Resume motion if paused
 
     xSemaphoreGive(state_mutex_);
 
@@ -134,6 +137,7 @@ esp_err_t PatternPlayer::pause() {
     }
 
     if (playback_state_ == PlaybackState::PLAYING) {
+        RobotMotionSystem::pauseMotion(true);
         playback_state_ = PlaybackState::PAUSED;
         ESP_LOGI(TAG, "Pattern playback paused");
     }
@@ -150,6 +154,7 @@ esp_err_t PatternPlayer::resume() {
     }
 
     if (playback_state_ == PlaybackState::PAUSED) {
+        RobotMotionSystem::pauseMotion(false);
         playback_state_ = PlaybackState::PLAYING;
         ESP_LOGI(TAG, "Pattern playback resumed");
     }
@@ -178,6 +183,8 @@ esp_err_t PatternPlayer::stop() {
     xSemaphoreGive(state_mutex_);
 
     ESP_LOGI(TAG, "Pattern playback stopped");
+
+    RobotMotionSystem::stopMotion();
     return ESP_OK;
 }
 
@@ -417,8 +424,6 @@ void PatternPlayer::serviceInterpolation() {
             }
             return;
         }
-        ESP_LOGD(TAG, "Polar move: theta=%.6f, rho=%.6f (step %d/%d)",
-            robot_theta, robot_rho, interpolation_state_.cur_step, interpolation_state_.interpolate_steps);
     }
 }
 
@@ -428,26 +433,16 @@ void PatternPlayer::serviceTask() {
     while (true) {
         serviceInterpolation();
 
-        // Check if we should be playing and can process new lines
         if (playback_state_ == PlaybackState::PLAYING && file_loaded_ && !interpolation_state_.in_progress) {
-            //ESP_LOGI(TAG, "serviceTask: ready to process new line, current_line_index=%zu, total_lines=%zu", current_line_index_, total_lines_);
             if (hasMoreLines()) {
                 PatternLine line = peekNextLine();
-                //ESP_LOGI(TAG, "serviceTask: peeked line valid=%d, theta=%.6f, rho=%.6f, first=%d", (int)line.is_valid, line.theta, line.rho, (int)line.is_first_line);
                 if (line.is_valid) {
-                    // Process the line (setup interpolation or immediate move)
                     if (processPatternLine(line)) {
-                        //ESP_LOGI(TAG, "serviceTask: processed line, popping line");
-                         // Pop the line after successful processing
                         popLine();
-                        ESP_LOGI(TAG, "Processed line, theta=%.6f, rho=%.6f, first=%s",
-                            line.theta, line.rho,
-                            line.is_first_line ? "true" : "false");
                     }
                 }
                 else {
                     ESP_LOGI(TAG, "serviceTask: invalid line, skipping");
-                    // Invalid line, skip it
                     popLine();
                 }
             }
@@ -456,7 +451,6 @@ void PatternPlayer::serviceTask() {
             }
         }
 
-        // Sleep for the configured delay
         vTaskDelay(pdMS_TO_TICKS(SERVICE_TASK_DELAY_MS));
     }
 }

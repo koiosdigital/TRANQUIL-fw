@@ -122,7 +122,7 @@ private:
 
     // Motor activity tracking for enable pin management
     volatile bool _motorsActive;
-    esp_timer_handle_t _motorInactivityTimer;
+    gptimer_handle_t _motorInactivityTimer;
 
     // Motion queue and execution
     MotionQueue _commandQueue;
@@ -207,7 +207,6 @@ private:
     void setMotorsActive(bool active);
     static void motorInactivityCallback(void* arg);
     static void debugTimerCallback(void* arg);
-    void updateMotorEnableState();
 
     // Motion planning
     void planMotion(const MotionCommand& cmd);
@@ -251,4 +250,7 @@ private:
 
     TaskHandle_t _commandNotifyTask = nullptr;
     void notifyCommandReadyFromISR();
+
+    void resetMotorInactivityTimer();
+    static bool inactivityTimerCallback(gptimer_handle_t timer, const gptimer_alarm_event_data_t* edata, void* user_ctx);
 };

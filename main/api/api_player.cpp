@@ -70,6 +70,12 @@ static esp_err_t handle_speed(httpd_req_t* req) {
     return handle_get_state(req);
 }
 
+// POST /api/player/resume - resume
+static esp_err_t handle_resume(httpd_req_t* req) {
+    PatternPlayer::resume();
+    return handle_get_state(req);
+}
+
 // URI handler definitions
 static httpd_uri_t player_state_uri = {
     .uri = "/api/player",
@@ -101,6 +107,12 @@ static httpd_uri_t player_speed_uri = {
     .handler = handle_speed,
     .user_ctx = NULL
 };
+static httpd_uri_t player_resume_uri = {
+    .uri = "/api/player/resume",
+    .method = HTTP_POST,
+    .handler = handle_resume,
+    .user_ctx = NULL
+};
 
 void api_player_register_endpoints(httpd_handle_t server) {
     httpd_register_uri_handler(server, &player_state_uri);
@@ -108,4 +120,5 @@ void api_player_register_endpoints(httpd_handle_t server) {
     httpd_register_uri_handler(server, &player_pause_uri);
     httpd_register_uri_handler(server, &player_stop_uri);
     httpd_register_uri_handler(server, &player_speed_uri);
+    httpd_register_uri_handler(server, &player_resume_uri);
 }

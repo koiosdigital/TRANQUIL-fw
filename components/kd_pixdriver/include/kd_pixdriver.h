@@ -163,6 +163,11 @@ public:
     void setBrightness(uint8_t brightness);
     void setSpeed(uint8_t speed);
     void setEnabled(bool enabled);
+    void setEffectByID(const std::string& effect_id) {
+        EffectConfig cfg = effect_config_;
+        cfg.effect = effect_id;
+        setEffect(cfg);
+    }
     void setMask(const std::vector<uint8_t>& mask);
     void clearMask();
 

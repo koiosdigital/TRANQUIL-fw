@@ -17,7 +17,7 @@
 #include "api_player.h"
 #include "led_api.h"
 
-//#include "static_files.h"
+#include "static_files.h"
 
 /* Empty handle to esp_http_server */
 httpd_handle_t kd_server = NULL;
@@ -290,7 +290,6 @@ esp_err_t time_zones_handler(httpd_req_t* req) {
 }
 
 // Static file handler function
-/*
 static esp_err_t static_file_handler(httpd_req_t* req) {
     const static_files::file* f = reinterpret_cast<const static_files::file*>(req->user_ctx);
     if (!f) {
@@ -316,7 +315,18 @@ static esp_err_t static_file_handler(httpd_req_t* req) {
     httpd_resp_send(req, reinterpret_cast<const char*>(f->contents), f->size);
     return ESP_OK;
 }
-*/
+
+// Wildcard OPTIONS handler for CORS preflight and API discoverability
+static esp_err_t wildcard_options_handler(httpd_req_t* req) {
+    // Allow all origins (adjust as needed for security)
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type,Authorization");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Credentials", "true");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, NULL, 0); // No body needed for OPTIONS
+    return ESP_OK;
+}
 
 void api_init() {
     init_mdns();
@@ -356,13 +366,21 @@ void api_init() {
     };
     httpd_register_uri_handler(server, &time_zones_uri);
 
+    // Register wildcard OPTIONS handler for all API routes
+    static httpd_uri_t options_uri = {
+        .uri = "/api/*",
+        .method = HTTP_OPTIONS,
+        .handler = wildcard_options_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &options_uri);
+
     cloud_api_register_handlers(server);
     patterns_api_register_handlers(server);
     playlists_api_register_handlers(server);
     api_player_register_endpoints(server);
     led_api_register_handlers(server);
 
-    /*
     // Create an array of httpd_uri_t to keep them alive after the loop
     static httpd_uri_t static_file_uris[static_files::num_of_files + 1]; // +1 for root '/' handler
 
@@ -409,5 +427,4 @@ void api_init() {
         };
         httpd_register_uri_handler(server, &root_uri);
     }
-    */
 }

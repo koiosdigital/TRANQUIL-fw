@@ -95,7 +95,7 @@ static esp_err_t playlists_create_handler(httpd_req_t* req) {
     }
     Playlist playlist = ManifestManager::jsonToPlaylist(json);
     cJSON_Delete(json);
-    if (!ManifestManager::addPlaylist(playlist)) {
+    if (ManifestManager::addPlaylist(playlist) != ESP_OK) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
@@ -108,19 +108,25 @@ static esp_err_t playlists_create_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
-// PATCH /api/playlists/{uuid}
-static esp_err_t playlists_update_handler(httpd_req_t* req) {
+// POST /api/playlists/{uuid} - add/delete pattern
+static esp_err_t playlists_modify_handler(httpd_req_t* req) {
     const char* uri = req->uri;
     const char* base = "/api/playlists/";
     if (strncmp(uri, base, strlen(base)) != 0) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
-    const char* uuid = uri + strlen(base);
-    if (!uuid || strlen(uuid) == 0) {
+    // Extract uuid (may have trailing /order)
+    char uuid[64];
+    const char* uuid_start = uri + strlen(base);
+    const char* slash = strchr(uuid_start, '/');
+    size_t uuid_len = slash ? (size_t)(slash - uuid_start) : strlen(uuid_start);
+    if (uuid_len == 0 || uuid_len >= sizeof(uuid)) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
+    strncpy(uuid, uuid_start, uuid_len);
+    uuid[uuid_len] = '\0';
     Playlist* playlist = ManifestManager::getPlaylist(uuid);
     if (!playlist) {
         httpd_resp_send_404(req);
@@ -142,23 +148,28 @@ static esp_err_t playlists_update_handler(httpd_req_t* req) {
     cJSON* json = cJSON_Parse(buf);
     free(buf);
     if (!json) {
-        httpd_resp_send_500(req);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad Request");
         return ESP_FAIL;
     }
-    // Delete the existing playlist
-    if (!ManifestManager::deletePlaylist(uuid)) {
+    cJSON* pattern = cJSON_GetObjectItem(json, "pattern");
+    cJSON* action = cJSON_GetObjectItem(json, "action");
+    if (!pattern || !cJSON_IsString(pattern) || !action || !cJSON_IsString(action)) {
         cJSON_Delete(json);
-        httpd_resp_send_500(req);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad Request");
         return ESP_FAIL;
     }
-    // Create a new playlist from the patch data and add it
-    Playlist updated_playlist = ManifestManager::jsonToPlaylist(json);
-    if (!ManifestManager::addPlaylist(updated_playlist)) {
-        cJSON_Delete(json);
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
+    bool ok = false;
+    if (strcmp(action->valuestring, "add") == 0) {
+        ok = ManifestManager::addPatternToPlaylist(uuid, pattern->valuestring);
+    }
+    else if (strcmp(action->valuestring, "delete") == 0) {
+        ok = ManifestManager::removePatternFromPlaylist(uuid, pattern->valuestring);
     }
     cJSON_Delete(json);
+    if (ok != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
     Playlist* updated = ManifestManager::getPlaylist(uuid);
     if (!updated) {
         httpd_resp_send_500(req);
@@ -173,29 +184,73 @@ static esp_err_t playlists_update_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
-// DELETE /api/playlists/{uuid}
-static esp_err_t playlists_delete_handler(httpd_req_t* req) {
+// POST /api/playlists/{uuid}/order - reorder playlist
+static esp_err_t playlists_order_handler(httpd_req_t* req) {
     const char* uri = req->uri;
     const char* base = "/api/playlists/";
     if (strncmp(uri, base, strlen(base)) != 0) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
-    const char* uuid = uri + strlen(base);
-    if (!uuid || strlen(uuid) == 0) {
+    // Extract uuid
+    const char* uuid_start = uri + strlen(base);
+    const char* order_str = strstr(uuid_start, "/order");
+    size_t uuid_len = order_str ? (size_t)(order_str - uuid_start) : strlen(uuid_start);
+    if (uuid_len == 0 || uuid_len >= 64) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
-    if (!ManifestManager::playlistExists(uuid)) {
+    char uuid[64];
+    strncpy(uuid, uuid_start, uuid_len);
+    uuid[uuid_len] = '\0';
+    Playlist* playlist = ManifestManager::getPlaylist(uuid);
+    if (!playlist) {
         httpd_resp_send_404(req);
         return ESP_FAIL;
     }
-    if (!ManifestManager::deletePlaylist(uuid)) {
+    int len = req->content_len;
+    char* buf = (char*)malloc(len + 1);
+    if (!buf) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
+    int ret = httpd_req_recv(req, buf, len);
+    if (ret <= 0) {
+        free(buf);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+    cJSON* json = cJSON_Parse(buf);
+    free(buf);
+    if (!json || !cJSON_IsArray(json)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad Request");
+        if (json) cJSON_Delete(json);
+        return ESP_FAIL;
+    }
+    std::vector<std::string> new_order;
+    cJSON* item = NULL;
+    cJSON_ArrayForEach(item, json) {
+        if (cJSON_IsString(item)) {
+            new_order.emplace_back(item->valuestring);
+        }
+    }
+    cJSON_Delete(json);
+    if (ManifestManager::reorderPlaylist(uuid, new_order) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    Playlist* updated = ManifestManager::getPlaylist(uuid);
+    if (!updated) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    cJSON* resp = ManifestManager::playlistToJson(*updated);
+    char* resp_str = cJSON_PrintUnformatted(resp);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, "{\"status\":\"deleted\"}", 21);
+    httpd_resp_send(req, resp_str, strlen(resp_str));
+    free(resp_str);
+    cJSON_Delete(resp);
     return ESP_OK;
 }
 
@@ -224,19 +279,19 @@ void playlists_api_register_handlers(httpd_handle_t server) {
     };
     httpd_register_uri_handler(server, &playlists_detail_uri);
 
-    static httpd_uri_t playlists_update_uri = {
+    static httpd_uri_t playlists_modify_uri = {
         .uri = "/api/playlists/*",
-        .method = HTTP_PATCH,
-        .handler = playlists_update_handler,
+        .method = HTTP_POST,
+        .handler = playlists_modify_handler,
         .user_ctx = NULL
     };
-    httpd_register_uri_handler(server, &playlists_update_uri);
+    httpd_register_uri_handler(server, &playlists_modify_uri);
 
-    static httpd_uri_t playlists_delete_uri = {
-        .uri = "/api/playlists/*",
-        .method = HTTP_DELETE,
-        .handler = playlists_delete_handler,
+    static httpd_uri_t playlists_order_uri = {
+        .uri = "/api/playlists/*/order",
+        .method = HTTP_POST,
+        .handler = playlists_order_handler,
         .user_ctx = NULL
     };
-    httpd_register_uri_handler(server, &playlists_delete_uri);
+    httpd_register_uri_handler(server, &playlists_order_uri);
 }

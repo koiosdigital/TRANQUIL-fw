@@ -100,7 +100,7 @@ static esp_err_t led_channel_config_handler(httpd_req_t* req) {
 
     // Set effect config
     EffectConfig eff_cfg = ch->getEffectConfig();
-    eff_cfg.effect = effect_id->valuestring;
+    if (effect_id && cJSON_IsString(effect_id)) eff_cfg.effect = effect_id->valuestring;
     if (brightness && cJSON_IsNumber(brightness)) eff_cfg.brightness = brightness->valueint;
     if (speed && cJSON_IsNumber(speed)) eff_cfg.speed = speed->valueint;
     if (on && cJSON_IsBool(on)) eff_cfg.enabled = cJSON_IsTrue(on);

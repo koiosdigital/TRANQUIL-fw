@@ -291,6 +291,9 @@ void PixelDriver::driverTask(void* param) {
             if (channel->getEffectConfig().enabled) {
                 effect_engine_->updateEffect(channel.get(), tick);
             }
+            else {
+                channel->getPixelBuffer().assign(channel->getConfig().pixel_count, PixelColor(0, 0, 0, 0));
+            }
         }
 
         // Apply current limiting and transmit
@@ -551,7 +554,7 @@ std::vector<uint8_t> PixelChannel::convertToI2SBuffer(const std::vector<PixelCol
 }
 
 void PixelChannel::transmit() {
-    if (!initialized_ || !effect_config_.enabled) return;
+    if (!initialized_) return;
 
     convertToI2SBuffer(scaled_buffer_);
 

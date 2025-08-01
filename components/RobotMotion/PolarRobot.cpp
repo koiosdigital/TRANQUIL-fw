@@ -22,6 +22,7 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
+#include "driver/gptimer.h"
 
 static const char* TAG = "PolarRobot";
 PolarRobot* g_robotInstance = nullptr;
@@ -60,17 +61,43 @@ esp_err_t PolarRobot::init() {
     initTimer();
     initHomingHardware();
 
-    // Create motor inactivity timer
-    esp_timer_create_args_t timer_args = {
-        .callback = motorInactivityCallback,
-        .arg = this,
-        .name = "motor_inactivity"
+    // Create motor inactivity GPTimer (1 MHz, one-shot)
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000 // 1MHz, 1us resolution
     };
-    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &_motorInactivityTimer), TAG, "Failed to create inactivity timer");
+    esp_err_t timer_err = gptimer_new_timer(&timer_config, &_motorInactivityTimer);
+    if (timer_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create inactivity GPTimer: %s", esp_err_to_name(timer_err));
+        return timer_err;
+    }
+
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = inactivityTimerCallback
+    };
+
+    ESP_RETURN_ON_ERROR(gptimer_register_event_callbacks(_motorInactivityTimer, &cbs, this), TAG, "Failed to register inactivity timer callback");
+    ESP_RETURN_ON_ERROR(gptimer_enable(_motorInactivityTimer), TAG, "Failed to enable inactivity GPTimer");
+
+    //add 5 s alarm
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = 5000000, // 5 seconds at 1MHz
+        .flags = {
+            .auto_reload_on_alarm = true,
+        }
+    };
+    ESP_RETURN_ON_ERROR(gptimer_set_alarm_action(_motorInactivityTimer, &alarm_config), TAG, "Failed to set inactivity timer alarm");
 
     setMotorsActive(false);
 
     return ESP_OK;
+}
+
+bool IRAM_ATTR PolarRobot::inactivityTimerCallback(gptimer_handle_t timer, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
+    PolarRobot* robot = static_cast<PolarRobot*>(user_ctx);
+    robot->setMotorsActive(false);
+    return true;
 }
 
 esp_err_t PolarRobot::initTMC() {
@@ -169,7 +196,11 @@ esp_err_t PolarRobot::initGPIO() {
     return ESP_OK;
 }
 
-void PolarRobot::setMotorsActive(bool active) {
+void IRAM_ATTR PolarRobot::setMotorsActive(bool active) {
+    if (active == true) {
+        resetMotorInactivityTimer();
+    }
+
     if (_motorsActive == active) {
         return;
     }
@@ -179,7 +210,7 @@ void PolarRobot::setMotorsActive(bool active) {
     if (CONFIG_ROBOT_COMMON_ENABLE_PIN != GPIO_NUM_NC) {
         if (active) {
             gpio_set_level((gpio_num_t)CONFIG_ROBOT_COMMON_ENABLE_PIN, 0);
-            esp_timer_stop(_motorInactivityTimer);
+            gptimer_stop(_motorInactivityTimer);
         }
         else {
             gpio_set_level((gpio_num_t)CONFIG_ROBOT_COMMON_ENABLE_PIN, 1);
@@ -187,20 +218,19 @@ void PolarRobot::setMotorsActive(bool active) {
     }
 }
 
-void PolarRobot::motorInactivityCallback(void* arg) {
-    PolarRobot* robot = static_cast<PolarRobot*>(arg);
-    robot->updateMotorEnableState();
-}
-
-void PolarRobot::updateMotorEnableState() {
-    bool shouldBeActive = (_currentMotion.active || !_commandQueue.isEmpty());
-    if (!shouldBeActive && _motorsActive) {
-        setMotorsActive(false);
+void IRAM_ATTR PolarRobot::resetMotorInactivityTimer() {
+    if (_motorInactivityTimer) {
+        gptimer_set_raw_count(_motorInactivityTimer, 0);
+        gptimer_start(_motorInactivityTimer);
     }
 }
 
-// Coordinate transformation functions (removed - now pure polar)
+void PolarRobot::motorInactivityCallback(void* arg) {
+    PolarRobot* robot = static_cast<PolarRobot*>(arg);
+    robot->setMotorsActive(false);
+}
 
+// Coordinate transformation functions (removed - now pure polar)
 double PolarRobot::normalizeAngle(double angle) {
     while (angle < 0) angle += 2 * M_PI;
     while (angle > 2 * M_PI) angle -= 2 * M_PI;
@@ -255,7 +285,7 @@ esp_err_t PolarRobot::moveToPolar(const PolarPoint& target, float feedRate) {
     }
 
     // Cancel any pending inactivity timer since we have new motion
-    esp_timer_stop(_motorInactivityTimer);
+    gptimer_stop(_motorInactivityTimer);
 
     ESP_LOGD(TAG, "Move to polar (%.2f°, %.3f) @ %.1f RPM - queued (queue size: %zu)",
         target.theta, target.rho, cmd.feedRate, _commandQueue.getCount());
@@ -394,6 +424,7 @@ bool IRAM_ATTR PolarRobot::stepTimerCallback(gptimer_handle_t timer, const gptim
 
 void IRAM_ATTR PolarRobot::generateSteps() {
     if (_homingControl.homingActive) {
+        resetMotorInactivityTimer();
         generateHomingSteps();
         return;
     }
@@ -456,11 +487,11 @@ void PolarRobot::handleStepOverflow() {
 
     while (_thetaPosition > thetaRotSteps) {
         _thetaPosition -= thetaRotSteps;
-        _rhoPosition -= CONFIG_ROBOT_RHO_STEPS_PER_ROT;
+        _rhoPosition -= CONFIG_ROBOT_RHO_STEPS_PER_ROT * 16.0f;
     }
     while (_thetaPosition <= -thetaRotSteps) {
         _thetaPosition += thetaRotSteps;
-        _rhoPosition += CONFIG_ROBOT_RHO_STEPS_PER_ROT;
+        _rhoPosition += CONFIG_ROBOT_RHO_STEPS_PER_ROT * 16.0f;
     }
 }
 
@@ -528,8 +559,9 @@ void PolarRobot::deinit() {
     }
 
     if (_motorInactivityTimer) {
-        esp_timer_stop(_motorInactivityTimer);
-        esp_timer_delete(_motorInactivityTimer);
+        gptimer_stop(_motorInactivityTimer);
+        gptimer_disable(_motorInactivityTimer);
+        gptimer_del_timer(_motorInactivityTimer);
         _motorInactivityTimer = nullptr;
     }
 

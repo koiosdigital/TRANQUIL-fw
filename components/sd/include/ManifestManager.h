@@ -90,6 +90,9 @@ public:
     static esp_err_t removePatternFromPlaylist(const std::string& playlistUuid, const std::string& patternUuid);
     static esp_err_t setFeaturedPattern(const std::string& playlistUuid, const std::string& patternUuid);
 
+    // Reorder patterns in a playlist
+    static bool reorderPlaylist(const std::string& playlistUuid, const std::vector<std::string>& newOrder);
+
     // Statistics
     static size_t getPatternCount();
     static size_t getPlaylistCount();
