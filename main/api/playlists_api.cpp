@@ -254,6 +254,44 @@ static esp_err_t playlists_order_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+// DELETE /api/playlists/{uuid}
+static esp_err_t playlists_delete_handler(httpd_req_t* req) {
+    const char* uri = req->uri;
+    const char* base = "/api/playlists/";
+    if (strncmp(uri, base, strlen(base)) != 0) {
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+    const char* uuid = uri + strlen(base);
+    if (!uuid || strlen(uuid) == 0) {
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+
+    // Check if playlist exists
+    Playlist* playlist = ManifestManager::getPlaylist(uuid);
+    if (!playlist) {
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+
+    // Delete the playlist
+    if (ManifestManager::deletePlaylist(uuid) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Return success response
+    cJSON* resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "status", "deleted");
+    char* resp_str = cJSON_PrintUnformatted(resp);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp_str, strlen(resp_str));
+    free(resp_str);
+    cJSON_Delete(resp);
+    return ESP_OK;
+}
+
 void playlists_api_register_handlers(httpd_handle_t server) {
     static httpd_uri_t playlists_list_uri = {
         .uri = "/api/playlists",
@@ -294,4 +332,12 @@ void playlists_api_register_handlers(httpd_handle_t server) {
         .user_ctx = NULL
     };
     httpd_register_uri_handler(server, &playlists_order_uri);
+
+    static httpd_uri_t playlists_delete_uri = {
+        .uri = "/api/playlists/*",
+        .method = HTTP_DELETE,
+        .handler = playlists_delete_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &playlists_delete_uri);
 }

@@ -153,12 +153,12 @@ void KdNTP::apply_config() {
 
     if (posixTZ == NULL) {
         ESP_LOGW(TAG, "Timezone %s not found in database, using UTC", tzname);
-        posixTZ = tz_db_get_posix_str("UTC");
     }
-
-    ESP_LOGD(TAG, "Setting POSIX timezone: %s", posixTZ);
-    setenv("TZ", posixTZ, 1);
-    tzset();
+    else {
+        ESP_LOGD(TAG, "Setting POSIX timezone: %s", posixTZ);
+        setenv("TZ", posixTZ, 1);
+        tzset();
+    }
 
     esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG(time_config.ntp_server);
     esp_netif_sntp_init(&sntp_config);

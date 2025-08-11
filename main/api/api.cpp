@@ -15,6 +15,7 @@
 #include "patterns_api.h"
 #include "playlists_api.h"
 #include "api_player.h"
+#include "api_playlist_player.h"
 #include "led_api.h"
 
 #include "static_files.h"
@@ -46,7 +47,7 @@ void init_mdns() {
 void server_init() {
     /* Generate default configuration */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 50;
+    config.max_uri_handlers = 60;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     httpd_start(&kd_server, &config);
@@ -379,6 +380,7 @@ void api_init() {
     patterns_api_register_handlers(server);
     playlists_api_register_handlers(server);
     api_player_register_endpoints(server);
+    api_playlist_player_register_endpoints(server);
     led_api_register_handlers(server);
 
     // Create an array of httpd_uri_t to keep them alive after the loop
