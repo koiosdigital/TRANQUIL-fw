@@ -28,7 +28,7 @@ bool PatternPlayer::file_loaded_ = false;
 // Interpolation state
 InterpolationState PatternPlayer::interpolation_state_;
 
-double PatternPlayer::feed_rate_ = 15.0;
+double PatternPlayer::feed_rate_ = 5.0;
 
 esp_err_t PatternPlayer::initialize() {
     if (initialized_) return ESP_OK;
