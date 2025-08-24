@@ -483,15 +483,21 @@ void IRAM_ATTR PolarRobot::generateSteps() {
 }
 
 void PolarRobot::handleStepOverflow() {
-    int32_t thetaRotSteps = _homingControl.steps_per_theta_rot * (CONFIG_ROBOT_THETA_GEAR_RATIO / 100.0f);
+    int32_t thetaRotSteps = _homingControl.steps_per_theta_rot;
 
     while (_thetaPosition > thetaRotSteps) {
+        ESP_LOGW(TAG, "Theta overflow detected: %ld steps", _thetaPosition);
         _thetaPosition -= thetaRotSteps;
         _rhoPosition -= CONFIG_ROBOT_RHO_STEPS_PER_ROT * 16.0f;
+        ESP_LOGW(TAG, "Adjusted theta position to %ld steps, rho position to %ld steps",
+            _thetaPosition, _rhoPosition);
     }
     while (_thetaPosition <= -thetaRotSteps) {
+        ESP_LOGW(TAG, "Theta underflow detected: %ld steps", _thetaPosition);
         _thetaPosition += thetaRotSteps;
         _rhoPosition += CONFIG_ROBOT_RHO_STEPS_PER_ROT * 16.0f;
+        ESP_LOGW(TAG, "Adjusted theta position to %ld steps, rho position to %ld steps",
+            _thetaPosition, _rhoPosition);
     }
 }
 
