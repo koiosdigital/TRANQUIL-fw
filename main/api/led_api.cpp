@@ -54,6 +54,55 @@ static esp_err_t led_config_get_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+// Handler to get a single channel configuration (GET /api/led/channel/*)
+static esp_err_t led_channel_get_handler(httpd_req_t* req) {
+    char channel_str[8];
+    int channel_idx = -1;
+    // Extract channel index from URI wildcard
+    if (httpd_req_get_url_query_str(req, channel_str, sizeof(channel_str)) == ESP_OK) {
+        // Not used, fallback to parsing from URI
+    }
+    else {
+        // Parse from URI path
+        const char* uri = req->uri;
+        const char* base = "/api/led/channel/";
+        if (strncmp(uri, base, strlen(base)) == 0) {
+            channel_idx = atoi(uri + strlen(base));
+        }
+    }
+    if (channel_idx < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid channel index");
+        return ESP_FAIL;
+    }
+    const PixelChannel* ch = PixelDriver::getChannel(channel_idx);
+    if (!ch) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Channel not found");
+        return ESP_FAIL;
+    }
+    const ChannelConfig& cfg = ch->getConfig();
+    const EffectConfig& eff = ch->getEffectConfig();
+    cJSON* ch_obj = cJSON_CreateObject();
+    cJSON_AddStringToObject(ch_obj, "effect_id", eff.effect.c_str());
+    cJSON_AddNumberToObject(ch_obj, "brightness", eff.brightness);
+    cJSON_AddNumberToObject(ch_obj, "speed", eff.speed);
+    cJSON_AddBoolToObject(ch_obj, "on", eff.enabled);
+    cJSON* color_obj = cJSON_CreateObject();
+    cJSON_AddNumberToObject(color_obj, "r", eff.color.r);
+    cJSON_AddNumberToObject(color_obj, "g", eff.color.g);
+    cJSON_AddNumberToObject(color_obj, "b", eff.color.b);
+    if (cfg.format == PixelFormat::RGBW) {
+        cJSON_AddNumberToObject(color_obj, "w", eff.color.w);
+    }
+    cJSON_AddItemToObject(ch_obj, "color", color_obj);
+    char* json = cJSON_Print(ch_obj);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    free(json);
+    cJSON_Delete(ch_obj);
+    return ESP_OK;
+}
+
+
 // Handler to configure a channel (POST /api/led/channel)
 static esp_err_t led_channel_config_handler(httpd_req_t* req) {
     char channel_str[8];
@@ -118,62 +167,7 @@ static esp_err_t led_channel_config_handler(httpd_req_t* req) {
     ch->setEffect(eff_cfg);
 
     cJSON_Delete(json);
-    cJSON* resp = cJSON_CreateObject();
-    cJSON_AddStringToObject(resp, "status", "ok");
-    char* resp_str = cJSON_Print(resp);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, resp_str, strlen(resp_str));
-    free(resp_str);
-    cJSON_Delete(resp);
-    return ESP_OK;
-}
-
-// Handler to get a single channel configuration (GET /api/led/channel/*)
-static esp_err_t led_channel_get_handler(httpd_req_t* req) {
-    char channel_str[8];
-    int channel_idx = -1;
-    // Extract channel index from URI wildcard
-    if (httpd_req_get_url_query_str(req, channel_str, sizeof(channel_str)) == ESP_OK) {
-        // Not used, fallback to parsing from URI
-    }
-    else {
-        // Parse from URI path
-        const char* uri = req->uri;
-        const char* base = "/api/led/channel/";
-        if (strncmp(uri, base, strlen(base)) == 0) {
-            channel_idx = atoi(uri + strlen(base));
-        }
-    }
-    if (channel_idx < 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid channel index");
-        return ESP_FAIL;
-    }
-    const PixelChannel* ch = PixelDriver::getChannel(channel_idx);
-    if (!ch) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Channel not found");
-        return ESP_FAIL;
-    }
-    const ChannelConfig& cfg = ch->getConfig();
-    const EffectConfig& eff = ch->getEffectConfig();
-    cJSON* ch_obj = cJSON_CreateObject();
-    cJSON_AddStringToObject(ch_obj, "effect_id", eff.effect.c_str());
-    cJSON_AddNumberToObject(ch_obj, "brightness", eff.brightness);
-    cJSON_AddNumberToObject(ch_obj, "speed", eff.speed);
-    cJSON_AddBoolToObject(ch_obj, "on", eff.enabled);
-    cJSON* color_obj = cJSON_CreateObject();
-    cJSON_AddNumberToObject(color_obj, "r", eff.color.r);
-    cJSON_AddNumberToObject(color_obj, "g", eff.color.g);
-    cJSON_AddNumberToObject(color_obj, "b", eff.color.b);
-    if (cfg.format == PixelFormat::RGBW) {
-        cJSON_AddNumberToObject(color_obj, "w", eff.color.w);
-    }
-    cJSON_AddItemToObject(ch_obj, "color", color_obj);
-    char* json = cJSON_Print(ch_obj);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
-    free(json);
-    cJSON_Delete(ch_obj);
-    return ESP_OK;
+    return led_channel_get_handler(req); // Return updated config
 }
 
 void led_api_register_handlers(httpd_handle_t server) {
